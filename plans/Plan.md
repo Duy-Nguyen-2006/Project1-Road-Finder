@@ -7,7 +7,7 @@
 - Frontend vẽ lộ trình tối ưu
 
 ## Tech stack
-- Frontend: ReactJS, Vite, Leaflet, OpenStreetMap, Axios
+- Frontend: ReactJS, Vite, Leaflet, OpenStreetMap, TanStack Query, Fetch API
 - Backend: Python, FastAPI, Uvicorn, Pydantic
 - Algorithm: OR-Tools for TSP
 - API style: REST API
@@ -23,7 +23,7 @@
 ## Mermaid
 ```mermaid
 flowchart LR
-    User[User] --> FE[Frontend React + Leaflet]
+    User[User] --> FE[Frontend React + Leaflet + TanStack Query]
     FE --> API[Backend FastAPI REST API]
     API --> TSPSolver[OR-Tools TSP Solver]
     TSPSolver --> API
@@ -40,7 +40,7 @@ flowchart LR
 - [x] Break the work into steps
 - [x] Create the root folders
 - [ ] Create the backend FastAPI project
-- [ ] Create the frontend React project
+- [ ] Create the frontend React + Vite project with TanStack Query
 - [ ] Implement the optimize route API
 - [ ] Implement the map UI
 - [ ] Integrate OR-Tools TSP solver
