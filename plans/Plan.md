@@ -1,47 +1,50 @@
-# Kế hoạch làm web tối ưu lộ trình cho shipper
+# Road Finder Plan
 
 ## Goal
-- Làm web chọn điểm trên bản đồ
-- Gửi các điểm lên backend
-- Backend giải TSP
-- Frontend vẽ lộ trình tối ưu
+
+Build a web app for shippers to choose points on a map, send those points to the backend, optimize the visiting order, and draw the optimized route on the map.
 
 ## Tech stack
-- Frontend: ReactJS, Vite, Leaflet, OpenStreetMap, TanStack Query, Fetch API
+
+- Frontend: React, Vite, Leaflet, OpenStreetMap, TanStack Query, Fetch API
 - Backend: Python, FastAPI, Uvicorn, Pydantic
 - Algorithm: OR-Tools for TSP
 - API style: REST API
 
-## Step
-1. Init folder
-2. Build backend API first
-3. Build frontend map UI
-4. Connect frontend and backend
-5. Use OR-Tools to solve TSP
-6. Show result on the map
+## System flow
 
-## Mermaid
 ```mermaid
 flowchart LR
-    User[User] --> FE[Frontend React + Leaflet + TanStack Query]
-    FE --> API[Backend FastAPI REST API]
-    API --> TSPSolver[OR-Tools TSP Solver]
-    TSPSolver --> API
-    API --> FE
-    FE --> Map[Draw optimized route]
+    User[User] --> FE[Frontend React + Leaflet]
+    FE -->|selected points| API[Backend FastAPI REST API]
+    API -->|optimize order| TSP[OR-Tools TSP Solver]
+    TSP -->|ordered points| API
+    API -->|JSON response| FE
+    FE -->|draw route| Map[Optimized route on map]
 ```
 
-## Checklist
-- [x] Read the slide and understand the problem
-- [x] Define the minimum scope
-- [x] Choose the simple architecture
-- [x] Design the user flow
-- [x] List the API needed
-- [x] Break the work into steps
-- [x] Create the root folders
-- [ ] Create the backend FastAPI project
-- [ ] Create the frontend React + Vite project with TanStack Query
-- [ ] Implement the optimize route API
-- [ ] Implement the map UI
+## Build order
+
+1. Build backend FastAPI API first.
+2. Create frontend React + Vite map UI.
+3. Connect frontend to backend.
+4. Add OR-Tools TSP optimization.
+5. Draw the optimized route on the map.
+
+## API needed first
+
+- `GET /health`: check backend is running.
+- `POST /optimize-route`: receive points and return ordered points.
+
+## Project checklist
+
+- [x] Define minimum scope
+- [x] Choose architecture
+- [x] Create root folders
+- [x] Create first backend model: `Point`
+- [ ] Complete backend FastAPI shell
+- [ ] Create frontend React + Vite app
+- [ ] Implement map point selection
+- [ ] Connect frontend and backend
 - [ ] Integrate OR-Tools TSP solver
-- [ ] Draw the optimized route on the map
+- [ ] Draw optimized route on map
