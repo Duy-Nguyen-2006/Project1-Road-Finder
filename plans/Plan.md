@@ -143,7 +143,28 @@ project/
 - Giữ code đơn giản, dễ đọc, dễ sửa
 - Với TSP, bắt đầu bằng DFS cho ít điểm trước rồi mới tối ưu thêm
 
-## 10. Kết quả mong đợi
+## 10. Nên làm gì trước
+Nếu làm như một senior, thứ tự tốt nhất là:
+1. **Init folder và chốt cấu trúc project**
+   - Tạo rõ `frontend/`, `backend/`, `plans/`
+   - Việc này giúp sau này không bị rối
+2. **Viết backend trước ở mức tối thiểu**
+   - Tạo FastAPI project
+   - Tạo sẵn API `POST /api/route/optimize`
+   - Trước tiên có thể trả dữ liệu mẫu
+3. **Viết frontend sau**
+   - Tạo giao diện bản đồ
+   - Gửi thử dữ liệu lên backend
+4. **Cuối cùng mới gắn thuật toán DFS cho TSP**
+   - Khi frontend và backend đã nói chuyện được với nhau, lúc đó mới thay dữ liệu mẫu bằng kết quả thật
+
+### Vì sao nên làm theo thứ tự này
+- **Init folder trước** để mọi thứ rõ ràng ngay từ đầu
+- **Backend trước** vì API là phần lõi của bài toán
+- **Frontend sau** để có chỗ hiển thị và test API
+- **Thuật toán cuối cùng** vì đây là phần khó nhất, làm sau khi khung đã ổn
+
+## 11. Kết quả mong đợi
 Sau khi hoàn thành, web sẽ có thể:
 - Cho người dùng chọn điểm trên bản đồ
 - Gửi dữ liệu lên backend bằng REST API
