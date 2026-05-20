@@ -15,26 +15,26 @@ This checklist tracks the backend implementation order for the Road Finder app.
   - [x] Define `OptimizeRouteResponse`
   - [x] Use `Point` for request and response data
 
-- [ ] Create `backend/app/services/tsp_service.py`
-  - [ ] Define `optimize_points(points)`
-  - [ ] Return the same points first as a stub
+- [x] Create `backend/app/services/tsp_service.py`
+  - [x] Define `optimize_points(points)`
+  - [x] Return the same points first as a stub
 
-- [ ] Create `backend/app/routers/route.py`
-  - [ ] Create `router = APIRouter()`
-  - [ ] Add `GET /health`
-  - [ ] Add `POST /optimize-route`
-  - [ ] Call `optimize_points(payload.points)`
+- [x] Create `backend/app/routers/route.py`
+  - [x] Create `router = APIRouter()`
+  - [x] Add `GET /health`
+  - [x] Add `POST /optimize-route`
+  - [x] Call `optimize_points(payload.points)`
 
-- [ ] Create `backend/app/main.py`
-  - [ ] Define `create_app()`
-  - [ ] Create the `FastAPI` app
-  - [ ] Include the route router
-  - [ ] Expose `app = create_app()`
+- [x] Create `backend/app/main.py`
+  - [x] Define `create_app()`
+  - [x] Create the `FastAPI` app
+  - [x] Include the route router
+  - [x] Expose `app = create_app()`
 
-- [ ] Create `backend/requirements.txt`
-  - [ ] Add `fastapi`
-  - [ ] Add `uvicorn[standard]`
-  - [ ] Add `pydantic`
+- [x] Create `backend/requirements.txt`
+  - [x] Add `fastapi`
+  - [x] Add `uvicorn[standard]`
+  - [x] Add `pydantic`
 
 ## Later backend version
 
