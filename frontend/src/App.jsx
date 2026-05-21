@@ -1,3 +1,4 @@
+import React from "react";
 import { useMutation } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import MapView from "./components/MapView";
@@ -8,7 +9,19 @@ import { toBackendPoint, toLeafletPoint } from "./types/point";
 import { useRoutePoints } from "./hooks/useRoutePoints";
 
 export default function App() {
-  const { selectedPoints, orderedPoints, addPoint, removePoint, clearPoints, setRouteResult } = useRoutePoints();
+  const {
+    selectionMode,
+    setSelectionMode,
+    startPoint,
+    endPoint,
+    waypoints,
+    selectedPoints,
+    orderedPoints,
+    addPoint,
+    removePoint,
+    clearPoints,
+    setRouteResult,
+  } = useRoutePoints();
   const [errorMessage, setErrorMessage] = useState("");
 
   const mutation = useMutation({
@@ -28,19 +41,21 @@ export default function App() {
   });
 
   const handleOptimize = () => {
-    if (selectedPoints.length < 2) {
+    if (!startPoint || !endPoint) {
+      setErrorMessage("Cần chọn đủ Start A và End B trước khi tối ưu route.");
       return;
     }
     mutation.mutate();
   };
 
   const routePreviewCount = useMemo(() => orderedPoints.length, [orderedPoints]);
+  const waypointCount = waypoints.length;
 
   return (
     <div className="app-shell">
       <header className="app-header">
         <h1>Road Finder</h1>
-        <p>Chọn các điểm trên bản đồ và tối ưu lộ trình.</p>
+        <p>Chọn điểm A, điểm B và waypoint trung gian để tìm lộ trình.</p>
       </header>
 
       <main className="app-content">
@@ -50,17 +65,22 @@ export default function App() {
 
         <aside className="side-panel">
           <RouteControls
+            selectionMode={selectionMode}
+            onSelectionModeChange={setSelectionMode}
+            startPoint={startPoint}
+            endPoint={endPoint}
             selectedPoints={selectedPoints}
             onOptimize={handleOptimize}
             onClear={clearPoints}
             isOptimizing={mutation.isPending}
           />
 
-          <PointList selectedPoints={selectedPoints} onRemovePoint={removePoint} />
+          <PointList startPoint={startPoint} endPoint={endPoint} waypoints={waypoints} onRemovePoint={removePoint} />
 
           <div className="panel-card">
             <h2>Kết quả</h2>
             <p>Số điểm route hiện tại: {routePreviewCount}</p>
+            <p>Số waypoint trung gian: {waypointCount}</p>
             {errorMessage ? <p className="error-text">{errorMessage}</p> : <p className="helper-text">Sẵn sàng nhận dữ liệu từ backend.</p>}
           </div>
         </aside>

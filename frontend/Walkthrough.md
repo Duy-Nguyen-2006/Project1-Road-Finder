@@ -6,9 +6,24 @@ Read this file when working on frontend details. For the full frontend design, r
 
 ## Current frontend status
 
-Frontend planning documents are created.
+Frontend first MVP app is built.
 
-The actual React + Vite frontend app has not been built yet.
+The frontend can now:
+
+- run as a React + Vite app
+- show an OpenStreetMap map with Leaflet
+- let the user choose point selection mode: Start A, End B, or Waypoint
+- let the user click the map to set Start A
+- let the user click the map to set End B
+- let the user click the map to add waypoint points
+- show selected points as markers with role colors
+- show Start A, End B, and waypoints in a list
+- remove selected points
+- clear all selected points
+- prepare route points in `[start, ...waypoints, end]` order for `POST /optimize-route`
+- draw a returned route polyline when backend returns `ordered_points`
+
+Important note: the backend is still a stub, so the current returned route order is not truly optimized yet.
 
 ## Before frontend coding
 
@@ -20,78 +35,88 @@ The actual React + Vite frontend app has not been built yet.
 
 ## Frontend first version
 
-- [ ] Create React + Vite app shell
-  - [ ] Create `frontend/package.json`
-  - [ ] Create `frontend/index.html`
+- [x] Create React + Vite app shell
+  - [x] Create `frontend/package.json`
+  - [x] Create `frontend/index.html`
   - [ ] Create `frontend/vite.config.js`
-  - [ ] Create `frontend/src/main.jsx`
-  - [ ] Create `frontend/src/App.jsx`
-  - [ ] Create `frontend/src/App.css`
+  - [x] Create `frontend/src/main.jsx`
+  - [x] Create `frontend/src/App.jsx`
+  - [x] Create `frontend/src/App.css`
 
-- [ ] Install frontend dependencies
-  - [ ] Add `react`
-  - [ ] Add `react-dom`
-  - [ ] Add `vite`
-  - [ ] Add `@vitejs/plugin-react`
-  - [ ] Add `leaflet`
-  - [ ] Add `react-leaflet`
-  - [ ] Add `@tanstack/react-query`
+- [x] Install frontend dependencies
+  - [x] Add `react`
+  - [x] Add `react-dom`
+  - [x] Add `vite`
+  - [x] Add `@vitejs/plugin-react`
+  - [x] Add `leaflet`
+  - [x] Add `react-leaflet`
+  - [x] Add `@tanstack/react-query`
 
-- [ ] Create frontend point conversion helpers
-  - [ ] Create `frontend/src/types/point.js`
-  - [ ] Define `toBackendPoint(leafletPoint)`
-  - [ ] Define `toLeafletPoint(apiPoint)`
-  - [ ] Confirm backend fields are `latitude` and `longitude`
-  - [ ] Confirm Leaflet fields are `lat` and `lng`
+- [x] Create frontend point conversion helpers
+  - [x] Create `frontend/src/types/point.js`
+  - [x] Define `toBackendPoint(leafletPoint)`
+  - [x] Define `toLeafletPoint(apiPoint)`
+  - [x] Confirm backend fields are `latitude` and `longitude`
+  - [x] Confirm Leaflet fields are `lat` and `lng`
 
-- [ ] Create backend API client
-  - [ ] Create `frontend/src/api/routeApi.js`
-  - [ ] Define `API_BASE_URL`
-  - [ ] Define `checkHealth()` for `GET /health`
-  - [ ] Define `optimizeRoute(points)` for `POST /optimize-route`
-  - [ ] Send request body as `{ points }`
-  - [ ] Read response body from `ordered_points`
+- [x] Create backend API client
+  - [x] Create `frontend/src/api/routeApi.js`
+  - [x] Define `API_BASE_URL`
+  - [x] Define `checkHealth()` for `GET /health`
+  - [x] Define `optimizeRoute(points)` for `POST /optimize-route`
+  - [x] Send request body as `{ points }`
+  - [x] Read response body from `ordered_points`
 
-- [ ] Create route point state hook
-  - [ ] Create `frontend/src/hooks/useRoutePoints.js`
-  - [ ] Store `selectedPoints`
-  - [ ] Store `orderedPoints`
-  - [ ] Define `addPoint(point)`
-  - [ ] Define `removePoint(index)`
-  - [ ] Define `clearPoints()`
-  - [ ] Define `setRouteResult(points)`
+- [x] Create route point state hook
+  - [x] Create `frontend/src/hooks/useRoutePoints.js`
+  - [x] Store `selectionMode`
+  - [x] Store `startPoint`
+  - [x] Store `endPoint`
+  - [x] Store `waypoints`
+  - [x] Store `selectedPoints`
+  - [x] Store `orderedPoints`
+  - [x] Define `addPoint(point)`
+  - [x] Define `removePoint(role, index)`
+  - [x] Define `clearPoints()`
+  - [x] Define `setRouteResult(points)`
 
-- [ ] Create map component
-  - [ ] Create `frontend/src/components/MapView.jsx`
-  - [ ] Render Leaflet map with OpenStreetMap tiles
-  - [ ] Add click handler for map point selection
-  - [ ] Show selected points as markers
-  - [ ] Draw route polyline from `orderedPoints`
-  - [ ] Import or support Leaflet CSS
-  - [ ] Make sure map container has a visible height
+- [x] Create map component
+  - [x] Create `frontend/src/components/MapView.jsx`
+  - [x] Render Leaflet map with OpenStreetMap tiles
+  - [x] Add click handler for map point selection
+  - [x] Support Start A, End B, and Waypoint roles
+  - [x] Show selected points as markers
+  - [x] Draw route polyline from `orderedPoints`
+  - [x] Import or support Leaflet CSS
+  - [x] Make sure map container has a visible height
 
-- [ ] Create route controls component
-  - [ ] Create `frontend/src/components/RouteControls.jsx`
-  - [ ] Add Optimize Route button
-  - [ ] Add Clear button
-  - [ ] Disable Optimize Route when fewer than two points are selected
-  - [ ] Show loading state while route optimization is running
+- [x] Create route controls component
+  - [x] Create `frontend/src/components/RouteControls.jsx`
+  - [x] Add Start A selection mode button
+  - [x] Add End B selection mode button
+  - [x] Add Waypoint selection mode button
+  - [x] Add Optimize Route button
+  - [x] Add Clear button
+  - [x] Disable Optimize Route until Start A and End B are selected
+  - [x] Show loading state while route optimization is running
 
-- [ ] Create selected point list component
-  - [ ] Create `frontend/src/components/PointList.jsx`
-  - [ ] Show selected points
-  - [ ] Show latitude and longitude values
-  - [ ] Add remove button for each point
+- [x] Create selected point list component
+  - [x] Create `frontend/src/components/PointList.jsx`
+  - [x] Show Start A
+  - [x] Show End B
+  - [x] Show waypoint points
+  - [x] Show latitude and longitude values
+  - [x] Add remove button for each point
 
-- [ ] Wire frontend app together
-  - [ ] Use `useRoutePoints()` in `frontend/src/App.jsx`
-  - [ ] Render `MapView`
-  - [ ] Render `RouteControls`
-  - [ ] Render `PointList`
-  - [ ] Use TanStack Query mutation for route optimization
-  - [ ] Convert selected points before sending to backend
-  - [ ] Convert returned ordered points before drawing on map
-  - [ ] Show basic error message if backend request fails
+- [x] Wire frontend app together
+  - [x] Use `useRoutePoints()` in `frontend/src/App.jsx`
+  - [x] Render `MapView`
+  - [x] Render `RouteControls`
+  - [x] Render `PointList`
+  - [x] Use TanStack Query mutation for route optimization
+  - [x] Convert selected points before sending to backend
+  - [x] Convert returned ordered points before drawing on map
+  - [x] Show basic error message if backend request fails
 
 ## Frontend local testing
 
@@ -99,21 +124,24 @@ The actual React + Vite frontend app has not been built yet.
   - [ ] Run FastAPI with Uvicorn from `backend/`
   - [ ] Confirm `GET /health` returns `{ "status": "ok" }`
 
-- [ ] Start frontend dev server
-  - [ ] Run frontend install command
-  - [ ] Run Vite dev server
-  - [ ] Open frontend in browser
+- [x] Start frontend dev server
+  - [x] Run frontend install command
+  - [x] Run Vite dev server
+  - [x] Open frontend in browser
 
-- [ ] Test map flow
-  - [ ] Map loads correctly
-  - [ ] User can click map to add points
-  - [ ] Markers appear for selected points
-  - [ ] Selected points appear in point list
-  - [ ] User can remove one selected point
-  - [ ] User can clear all selected points
+- [x] Test map flow
+  - [x] Map loads correctly
+  - [x] User can choose Start A mode and set A on the map
+  - [x] User can choose End B mode and set B on the map
+  - [x] User can choose Waypoint mode and add waypoint points
+  - [x] Markers appear for selected points
+  - [x] Selected points appear in point list
+  - [x] User can remove one selected point
+  - [x] User can clear all selected points
 
 - [ ] Test backend connection
-  - [ ] Select at least two points
+  - [ ] Select Start A and End B
+  - [ ] Optionally select waypoint points
   - [ ] Click Optimize Route
   - [ ] Frontend sends `POST /optimize-route`
   - [ ] Backend returns `ordered_points`
@@ -144,7 +172,9 @@ The actual React + Vite frontend app has not been built yet.
 
 ## API data reminder
 
-Frontend map state should look like this:
+Frontend selected route state should be ordered as Start A, waypoints, then End B before sending to backend.
+
+Frontend map point state should look like this:
 
 ```js
 [
@@ -186,4 +216,4 @@ Frontend route drawing data should look like this:
 
 ## Next step
 
-The next best frontend step is to create the React + Vite app shell in `frontend/`, then add Leaflet map point selection.
+The next best frontend step is to run the backend server, test `POST /optimize-route` from the Start A / End B frontend flow, and confirm the returned `ordered_points` draw a route polyline on the map.

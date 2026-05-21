@@ -53,6 +53,8 @@ This keeps the project easy for a newbie to follow.
 
 Backend first version is complete.
 
+Frontend MVP first version is also partially complete. The frontend can now run as a React + Vite app, show a Leaflet/OpenStreetMap map, let the user define Start A, End B, and waypoint points, and show selected points as markers/list items.
+
 The backend can now:
 
 - define map points
@@ -85,11 +87,12 @@ Important note: the backend does not optimize with OR-Tools yet. The current rou
   - [ ] Test `GET /health`
   - [ ] Test `POST /optimize-route`
 
-- [ ] Build frontend app
-  - [ ] Create React + Vite project
-  - [ ] Add Leaflet map
-  - [ ] Let user select points on the map
-  - [ ] Show selected points as markers
+- [x] Build frontend app
+  - [x] Create React + Vite project
+  - [x] Add Leaflet map
+  - [x] Let user define Start A and End B on the map
+  - [x] Let user add waypoint points on the map
+  - [x] Show selected points as markers
 
 - [ ] Connect frontend and backend
   - [ ] Send selected points to `POST /optimize-route`
@@ -110,4 +113,4 @@ Important note: the backend does not optimize with OR-Tools yet. The current rou
 
 ## Next step
 
-The next best step is to test the backend API locally before building the frontend.
+The next best step is to run the backend API locally and test the full frontend-to-backend route flow: define Start A and End B on the map, optionally add waypoint points, click `Optimize Route`, receive `ordered_points`, and draw the route polyline.

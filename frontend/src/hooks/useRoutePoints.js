@@ -1,21 +1,53 @@
 import { useState } from "react";
 
+export const SELECTION_MODES = {
+  START: "start",
+  END: "end",
+  WAYPOINT: "waypoint",
+};
+
 export function useRoutePoints() {
-  const [selectedPoints, setSelectedPoints] = useState([]);
+  const [selectionMode, setSelectionMode] = useState(SELECTION_MODES.START);
+  const [startPoint, setStartPoint] = useState(null);
+  const [endPoint, setEndPoint] = useState(null);
+  const [waypoints, setWaypoints] = useState([]);
   const [orderedPoints, setOrderedPoints] = useState([]);
 
+  const selectedPoints = [startPoint, ...waypoints, endPoint].filter(Boolean);
+
   const addPoint = (point) => {
-    setSelectedPoints((current) => [...current, point]);
+    const pointWithRole = {
+      ...point,
+      role: selectionMode,
+    };
+
+    if (selectionMode === SELECTION_MODES.START) {
+      setStartPoint(pointWithRole);
+    } else if (selectionMode === SELECTION_MODES.END) {
+      setEndPoint(pointWithRole);
+    } else {
+      setWaypoints((current) => [...current, pointWithRole]);
+    }
+
     setOrderedPoints([]);
   };
 
-  const removePoint = (index) => {
-    setSelectedPoints((current) => current.filter((_, currentIndex) => currentIndex !== index));
+  const removePoint = (role, index) => {
+    if (role === SELECTION_MODES.START) {
+      setStartPoint(null);
+    } else if (role === SELECTION_MODES.END) {
+      setEndPoint(null);
+    } else {
+      setWaypoints((current) => current.filter((_, currentIndex) => currentIndex !== index));
+    }
+
     setOrderedPoints([]);
   };
 
   const clearPoints = () => {
-    setSelectedPoints([]);
+    setStartPoint(null);
+    setEndPoint(null);
+    setWaypoints([]);
     setOrderedPoints([]);
   };
 
@@ -24,6 +56,11 @@ export function useRoutePoints() {
   };
 
   return {
+    selectionMode,
+    setSelectionMode,
+    startPoint,
+    endPoint,
+    waypoints,
     selectedPoints,
     orderedPoints,
     addPoint,

@@ -89,7 +89,8 @@ select {
 
 .primary-button,
 .secondary-button,
-.icon-button {
+.icon-button,
+.mode-button {
   border: none;
   border-radius: 10px;
   padding: 0.75rem 1rem;
@@ -103,20 +104,34 @@ select {
 }
 
 .secondary-button,
-.icon-button {
+.icon-button,
+.mode-button {
   background: #e5e7eb;
   color: #111827;
 }
 
+.mode-button-group {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.5rem;
+}
+
+.mode-button.active {
+  background: #0f172a;
+  color: #ffffff;
+}
+
 .primary-button:hover,
 .secondary-button:hover,
-.icon-button:hover {
+.icon-button:hover,
+.mode-button:hover {
   transform: translateY(-1px);
 }
 
 .primary-button:disabled,
 .secondary-button:disabled,
-.icon-button:disabled {
+.icon-button:disabled,
+.mode-button:disabled {
   cursor: not-allowed;
   opacity: 0.6;
   transform: none;
@@ -147,7 +162,8 @@ select {
   gap: 0.75rem;
 }
 
-.point-item {
+.point-item,
+.point-section {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -157,10 +173,29 @@ select {
   padding: 0.75rem;
 }
 
+.point-section {
+  margin-bottom: 0.75rem;
+}
+
+.point-section-start {
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+
+.point-section-end {
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
 .point-coords {
   color: #64748b;
   font-size: 0.9rem;
   margin-top: 0.25rem;
+}
+
+.panel-card h3 {
+  margin: 1rem 0 0.75rem;
+  font-size: 1rem;
 }
 
 @media (max-width: 900px) {
