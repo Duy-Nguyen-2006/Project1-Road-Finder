@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.models.route import OptimizeRouteRequest, OptimizeRouteResponse
+from app.models.route_models import OptimizeRouteRequest, OptimizeRouteResponse
 from app.services.tsp_service import optimize_points
 
 

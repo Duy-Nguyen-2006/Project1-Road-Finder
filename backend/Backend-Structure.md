@@ -65,7 +65,7 @@ flowchart LR
     POINT --> SERVICE[tsp_service.py optimize_points]
 ```
 
-### Step 2: [`backend/app/models/route.py`](../backend/app/models/route.py)
+### Step 2: [`backend/app/models/route_models.py`](../backend/app/models/route_models.py)
 
 Write this file second because the API endpoint needs request and response schemas.
 
@@ -89,7 +89,7 @@ Interaction:
 flowchart LR
     POINT[point.py Point] --> REQ[route.py OptimizeRouteRequest]
     POINT --> RES[route.py OptimizeRouteResponse]
-    REQ --> API[routers/route.py optimize_route]
+    REQ --> API[routers/route_api.py optimize_route]
     API --> RES
 ```
 
@@ -118,7 +118,7 @@ Interaction:
 
 ```mermaid
 flowchart LR
-    API[routers/route.py optimize_route] --> OPT[services/tsp_service.py optimize_points]
+    API[routers/route_api.py optimize_route] --> OPT[services/tsp_service.py optimize_points]
     OPT --> MATRIX[services/tsp_service.py build_distance_matrix]
     MATRIX --> DIST[utils/distance.py haversine_distance]
     OPT --> SOLVE[services/tsp_service.py solve_tsp]
@@ -149,7 +149,7 @@ flowchart LR
     DIST --> MATRIX[tsp_service.py build_distance_matrix]
 ```
 
-### Step 5: [`backend/app/routers/route.py`](../backend/app/routers/route.py)
+### Step 5: [`backend/app/routers/route_api.py`](../backend/app/routers/route_api.py)
 
 Write this file after the models and service stub exist.
 
@@ -167,18 +167,18 @@ Functions/objects to write:
 3. `optimize_route(payload)`
    - Endpoint: `POST /optimize-route`
    - Input: `OptimizeRouteRequest`
-   - Calls: `optimize_points(payload.points)`
+   - Calls: `optimize_points(data_from_fe.points)`
    - Output: `OptimizeRouteResponse`
 
 Interaction:
 
 ```mermaid
 flowchart LR
-    FE[Frontend] --> API[routers/route.py optimize_route]
-    API --> REQ[models/route.py OptimizeRouteRequest]
+    FE[Frontend] --> API[routers/route_api.py optimize_route]
+    API --> REQ[models/route_models.py OptimizeRouteRequest]
     API --> SERVICE[services/tsp_service.py optimize_points]
     SERVICE --> API
-    API --> RES[models/route.py OptimizeRouteResponse]
+    API --> RES[models/route_models.py OptimizeRouteResponse]
     RES --> FE
 ```
 
@@ -227,7 +227,7 @@ Interaction:
 ```mermaid
 flowchart LR
     MAIN[main.py create_app] --> FASTAPI[FastAPI app]
-    MAIN --> ROUTER[routers/route.py router]
+    MAIN --> ROUTER[routers/route_api.py router]
     ROUTER --> HEALTH[health_check]
     ROUTER --> OPTIMIZE[optimize_route]
 ```
@@ -266,22 +266,22 @@ flowchart LR
 flowchart TD
     FE[Frontend React map]
 
-    FE -->|POST /optimize-route with points| API[routers/route.py optimize_route]
+    FE -->|POST /optimize-route with points| API[routers/route_api.py optimize_route]
 
-    API -->|payload validation| REQ[models/route.py OptimizeRouteRequest]
+    API -->|payload validation| REQ[models/route_models.py OptimizeRouteRequest]
     REQ --> POINT[models/point.py Point]
 
-    API -->|payload.points| SERVICE[services/tsp_service.py optimize_points]
+    API -->|data_from_fe.points| SERVICE[services/tsp_service.py optimize_points]
 
     SERVICE -->|later| MATRIX[services/tsp_service.py build_distance_matrix]
     MATRIX --> DIST[utils/distance.py haversine_distance]
     SERVICE -->|later| SOLVER[services/tsp_service.py solve_tsp]
 
     SERVICE -->|ordered points| API
-    API --> RES[models/route.py OptimizeRouteResponse]
+    API --> RES[models/route_models.py OptimizeRouteResponse]
     RES -->|JSON response| FE
 
-    MAIN[main.py create_app] --> ROUTER[routers/route.py router]
+    MAIN[main.py create_app] --> ROUTER[routers/route_api.py router]
     ROUTER --> API
 ```
 
@@ -292,9 +292,9 @@ For the first backend version, write only the minimum needed to make the API wor
 Write these files first:
 
 1. [`backend/app/models/point.py`](../backend/app/models/point.py)
-2. [`backend/app/models/route.py`](../backend/app/models/route.py)
+2. [`backend/app/models/route_models.py`](../backend/app/models/route_models.py)
 3. [`backend/app/services/tsp_service.py`](../backend/app/services/tsp_service.py)
-4. [`backend/app/routers/route.py`](../backend/app/routers/route.py)
+4. [`backend/app/routers/route_api.py`](../backend/app/routers/route_api.py)
 5. [`backend/app/main.py`](../backend/app/main.py)
 6. [`backend/requirements.txt`](../backend/requirements.txt)
 

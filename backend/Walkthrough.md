@@ -10,7 +10,7 @@ This checklist tracks the backend implementation order for the Road Finder app.
   - [x] Add `longitude`
   - [x] Add example data comment
 
-- [x] Create `backend/app/models/route.py`
+- [x] Create `backend/app/models/route_models.py`
   - [x] Define `OptimizeRouteRequest`
   - [x] Define `OptimizeRouteResponse`
   - [x] Use `Point` for request and response data
@@ -19,11 +19,11 @@ This checklist tracks the backend implementation order for the Road Finder app.
   - [x] Define `optimize_points(points)`
   - [x] Return the same points first as a stub
 
-- [x] Create `backend/app/routers/route.py`
+- [x] Create `backend/app/routers/route_api.py`
   - [x] Create `router = APIRouter()`
   - [x] Add `GET /health`
   - [x] Add `POST /optimize-route`
-  - [x] Call `optimize_points(payload.points)`
+  - [x] Call `optimize_points(data_from_fe.points)`
 
 - [x] Create `backend/app/main.py`
   - [x] Define `create_app()`
