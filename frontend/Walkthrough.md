@@ -38,7 +38,7 @@ Important note: the backend is still a stub, so the current returned route order
 - [x] Create React + Vite app shell
   - [x] Create `frontend/package.json`
   - [x] Create `frontend/index.html`
-  - [ ] Create `frontend/vite.config.js`
+  - [x] Create `frontend/vite.config.js`
   - [x] Create `frontend/src/main.jsx`
   - [x] Create `frontend/src/App.jsx`
   - [x] Create `frontend/src/App.css`
