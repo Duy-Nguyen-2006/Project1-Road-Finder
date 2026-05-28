@@ -1,26 +1,6 @@
 from app.models.point import Point
-import math
+from app.utils.distance import haversine_distance
 import requests
-
-
-def haversine_distance(lat1, lon1, lat2, lon2):
-    """
-    Calculate the great circle distance between two points 
-    on the earth (specified in decimal degrees)
-    """
-    # Convert decimal degrees to radians
-    lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
-    
-    # Haversine formula
-    dlat = lat2 - lat1
-    dlon = lon2 - lon1
-    a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
-    c = 2 * math.asin(math.sqrt(a))
-    
-    # Radius of earth in kilometers
-    r = 6371
-    
-    return c * r
 
 
 def find_closest_intersection(point: Point, intersections: list[dict]) -> Point:
@@ -51,59 +31,60 @@ def find_closest_intersection(point: Point, intersections: list[dict]) -> Point:
     return point
 
 
-def solve_tsp_branch_and_bound(distance_matrix: list[list[int]]) -> list[int]:
+def solve_tsp_heuristic(distance_matrix: list[list[int]]) -> list[int]:
     """
-    Solve the TSP with a fixed start (index 0) and fixed end (index n-1)
-    using a custom Branch & Bound algorithm with a nearest-neighbor heuristic.
+    Solve TSP using Nearest Neighbor + 2-opt heuristic.
+    Fixed start (index 0) and fixed end (index n-1).
+    Returns list of indices representing the optimized path.
     """
     n = len(distance_matrix)
     if n <= 2:
         return list(range(n))
-        
-    best_path = list(range(n))
-    best_cost = float('inf')
     
-    # Precompute min outgoing edge for each node (excluding itself)
-    min_edges = []
-    for i in range(n):
-        edges = [distance_matrix[i][j] for j in range(n) if i != j]
-        min_edges.append(min(edges) if edges else 0)
+    # Step 1: Nearest Neighbor - xây dựng path ban đầu
+    path = [0]  # Bắt đầu từ điểm 0
+    unvisited = set(range(1, n - 1))  # Các điểm trung gian (không bao gồm 0 và n-1)
+    
+    current = 0
+    while unvisited:
+        # Tìm điểm gần nhất trong các điểm chưa thăm
+        nearest = min(unvisited, key=lambda x: distance_matrix[current][x])
+        path.append(nearest)
+        unvisited.remove(nearest)
+        current = nearest
+    
+    # Kết thúc tại điểm n-1
+    path.append(n - 1)
+    
+    # Step 2: 2-opt - tối ưu path bằng cách loại bỏ các cạnh chéo nhau
+    improved = True
+    max_iterations = 100  # Giới hạn số lần lặp để tránh treo
+    iteration = 0
+    
+    while improved and iteration < max_iterations:
+        improved = False
+        iteration += 1
         
-    def get_lower_bound(curr, unvisited):
-        if not unvisited:
-            return distance_matrix[curr][n-1]
-            
-        # Add minimum distance from current node to any unvisited node
-        lb = min(distance_matrix[curr][u] for u in unvisited)
-        # Add minimum outgoing edge for all remaining unvisited nodes
-        for u in unvisited:
-            lb += min_edges[u]
-        return lb
-
-    def dfs(curr, unvisited, path, cost):
-        nonlocal best_cost, best_path
-        
-        # Calculate lower bound and prune if it exceeds current best cost
-        lb = get_lower_bound(curr, unvisited)
-        if cost + lb >= best_cost:
-            return
-            
-        if not unvisited:
-            # Connect the last waypoint to the fixed end node (n-1)
-            total_cost = cost + distance_matrix[curr][n-1]
-            if total_cost < best_cost:
-                best_cost = total_cost
-                best_path = path + [n-1]
-            return
-            
-        # Branch-ordering: visit nearest neighbors first to find good upper bound early
-        sorted_unvisited = sorted(unvisited, key=lambda u: distance_matrix[curr][u])
-        for next_node in sorted_unvisited:
-            dfs(next_node, unvisited - {next_node}, path + [next_node], cost + distance_matrix[curr][next_node])
-
-    # Search: Start at 0, intermediate waypoints are indices 1 to n-2, end is n-1
-    dfs(0, set(range(1, n-1)), [0], 0)
-    return best_path
+        # Chỉ tối ưu các điểm trung gian (từ index 1 đến n-2)
+        for i in range(1, n - 2):
+            for j in range(i + 1, n - 1):
+                # Tính chi phí hiện tại
+                current_cost = (
+                    distance_matrix[path[i-1]][path[i]] + 
+                    distance_matrix[path[j]][path[j+1]]
+                )
+                # Tính chi phí sau khi đảo ngược đoạn từ i đến j
+                new_cost = (
+                    distance_matrix[path[i-1]][path[j]] + 
+                    distance_matrix[path[i]][path[j+1]]
+                )
+                
+                # Nếu chi phí mới tốt hơn thì đảo ngược
+                if new_cost < current_cost:
+                    path[i:j+1] = reversed(path[i:j+1])
+                    improved = True
+    
+    return path
 
 
 def fetch_road_route_geometry(points: list[Point]) -> list[Point]:
@@ -151,7 +132,7 @@ def optimize_points(points: list[Point], intersections: list[dict] = None) -> li
     
     1. Optionally snaps each selected point to the nearest OSM intersection.
     2. Builds a distance matrix using Haversine formula.
-    3. Solves the TSP using a custom Branch & Bound algorithm.
+    3. Solves the TSP using Nearest Neighbor + 2-opt heuristic.
     4. Fetches the exact street-level path geometry from OSRM API.
     """
     # 1. Snap to nearest intersections if provided
@@ -178,8 +159,8 @@ def optimize_points(points: list[Point], intersections: list[dict] = None) -> li
                     snapped_points[j].latitude, snapped_points[j].longitude
                 ) * 1000)  # Convert to meters
                 
-    # 3. Solve TSP using custom Branch & Bound
-    optimized_indices = solve_tsp_branch_and_bound(distance_matrix)
+    # 3. Solve TSP using Nearest Neighbor + 2-opt heuristic
+    optimized_indices = solve_tsp_heuristic(distance_matrix)
     ordered_snapped_points = [snapped_points[i] for i in optimized_indices]
     
     # 4. Fetch the exact road-based geometry path connecting all ordered snapped nodes
