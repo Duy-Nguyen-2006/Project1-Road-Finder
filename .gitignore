@@ -1,10 +1,28 @@
-```
+# Agent/local tooling
+.agents/
+
 # Dependencies
 node_modules/
+frontend/node_modules/
 
 # Environment
 .env
+.env.*
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+backend/.venv/
 
 # Vite build artifacts
 frontend/node_modules/.vite/
-```
+frontend/dist/
+
+# Harness durable layer
+harness.db
+harness.db-wal
+harness.db-shm
+scripts/bin/harness-cli
+scripts/bin/harness-cli.exe
