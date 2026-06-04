@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useMemo } from "react";
 import {
   MapContainer,
   Marker,
@@ -10,7 +10,6 @@ import {
   useMapEvents,
 } from "react-leaflet";
 import L from "leaflet";
-import { SELECTION_MODES } from "../hooks/useRoutePoints";
 import { bboxToLeaflet, routePointsToLeaflet } from "../utils/geo";
 
 // Fix Leaflet default icon issue with Vite/Webpack
@@ -23,16 +22,6 @@ L.Icon.Default.mergeOptions({
   shadowUrl:
     "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
 });
-
-const ROLE_COLORS = {
-  [SELECTION_MODES.START]: { color: "#16a34a", fillColor: "#22c55e" },
-  [SELECTION_MODES.END]: { color: "#dc2626", fillColor: "#ef4444" },
-};
-
-const ROLE_LABELS = {
-  [SELECTION_MODES.START]: "Start",
-  [SELECTION_MODES.END]: "End",
-};
 
 const DEFAULT_CENTER = [10.7769, 106.7009];
 const DEFAULT_ZOOM = 13;
@@ -84,8 +73,11 @@ export default function MapView({
   selectionEnabled,
   onAddPoint,
 }) {
-  const rectangleBounds = bboxToLeaflet(bounds);
-  const polylinePositions = routePointsToLeaflet(routePoints);
+  const rectangleBounds = useMemo(() => bboxToLeaflet(bounds), [bounds]);
+  const polylinePositions = useMemo(
+    () => routePointsToLeaflet(routePoints),
+    [routePoints]
+  );
 
   return (
     <MapContainer

@@ -54,3 +54,5 @@ export async function checkHealth() {
 export const ERROR_MESSAGES = {
   ACCEPTED_AREA: ACCEPTED_AREA_DETAIL,
 };
+
+export { ACCEPTED_AREA_DETAIL };

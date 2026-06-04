@@ -1,21 +1,21 @@
 import React, { useCallback, useMemo } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import MapView from "./components/MapView";
 import PointList from "./components/PointList";
 import RouteControls from "./components/RouteControls";
-import { findShortestPath, getGraphBounds } from "./api/routeApi";
+import {
+  ACCEPTED_AREA_DETAIL,
+  findShortestPath,
+  getGraphBounds,
+} from "./api/routeApi";
 import { isInsideBbox } from "./utils/geo";
 import { formatDistance } from "./utils/format";
 import {
   ROUTE_STATUS,
-  SELECTION_MODES,
   useRoutePoints,
 } from "./hooks/useRoutePoints";
 
-const ACCEPTED_AREA_MESSAGE = "Error: Not in accepted area";
-
 export default function App() {
-  const queryClient = useQueryClient();
   const {
     selectionMode,
     setSelectionMode,
@@ -24,7 +24,6 @@ export default function App() {
     route,
     status,
     errorMessage,
-    bounds,
     canFindRoute,
     addPoint,
     removePoint,
@@ -32,7 +31,7 @@ export default function App() {
     beginRouteRequest,
     completeRouteRequest,
     failRouteRequest,
-  } = useRoutePoints({ bounds: null });
+  } = useRoutePoints();
 
   const boundsQuery = useQuery({
     queryKey: ["graph-bounds"],
@@ -69,7 +68,7 @@ export default function App() {
         longitude: rawPoint.lng,
       };
       if (!isInsideBbox(candidate, bbox)) {
-        failRouteRequest(ACCEPTED_AREA_MESSAGE);
+        failRouteRequest(ACCEPTED_AREA_DETAIL);
         return;
       }
       addPoint(candidate);
@@ -84,17 +83,6 @@ export default function App() {
       end: { latitude: endPoint.latitude, longitude: endPoint.longitude },
     });
   }, [endPoint, mutation, startPoint]);
-
-  const handleClear = useCallback(() => {
-    clearAll();
-  }, [clearAll]);
-
-  const handleRemovePoint = useCallback(
-    (role) => {
-      removePoint(role);
-    },
-    [removePoint]
-  );
 
   const selectionEnabled = boundsLoaded;
 
@@ -148,7 +136,7 @@ export default function App() {
           <PointList
             startPoint={startPoint}
             endPoint={endPoint}
-            onRemovePoint={handleRemovePoint}
+            onRemovePoint={removePoint}
           />
 
           <div className="panel-card">

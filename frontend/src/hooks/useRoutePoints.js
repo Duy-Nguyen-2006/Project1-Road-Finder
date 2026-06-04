@@ -14,7 +14,7 @@ export const ROUTE_STATUS = {
 
 const EMPTY_ROUTE = null;
 
-export function useRoutePoints({ bounds = null } = {}) {
+export function useRoutePoints() {
   const [selectionMode, setSelectionMode] = useState(SELECTION_MODES.START);
   const [startPoint, setStartPoint] = useState(null);
   const [endPoint, setEndPoint] = useState(null);
@@ -96,7 +96,6 @@ export function useRoutePoints({ bounds = null } = {}) {
     route,
     status,
     errorMessage,
-    bounds,
     canFindRoute,
     addPoint,
     removePoint,
