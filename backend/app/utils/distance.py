@@ -1,5 +1,13 @@
 import math
 
+EARTH_RADIUS_METERS = 6371000.0
+
+
+def haversine_meters(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance in meters between two WGS84 points."""
+    return haversine_distance(lat1, lon1, lat2, lon2) * 1000.0
+
+
 def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """
     Calculate the great circle distance between two points 
