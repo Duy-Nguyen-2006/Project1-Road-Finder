@@ -1,71 +1,108 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 
 export const SELECTION_MODES = {
   START: "start",
   END: "end",
-  WAYPOINT: "waypoint",
 };
 
-export function useRoutePoints() {
+export const ROUTE_STATUS = {
+  IDLE: "idle",
+  LOADING: "loading",
+  SUCCESS: "success",
+  ERROR: "error",
+};
+
+const EMPTY_ROUTE = null;
+
+export function useRoutePoints({ bounds = null } = {}) {
   const [selectionMode, setSelectionMode] = useState(SELECTION_MODES.START);
   const [startPoint, setStartPoint] = useState(null);
   const [endPoint, setEndPoint] = useState(null);
-  const [waypoints, setWaypoints] = useState([]);
-  const [orderedPoints, setOrderedPoints] = useState([]);
+  const [route, setRoute] = useState(EMPTY_ROUTE);
+  const [status, setStatus] = useState(ROUTE_STATUS.IDLE);
+  const [errorMessage, setErrorMessage] = useState("");
 
-  const selectedPoints = [startPoint, ...waypoints, endPoint].filter(Boolean);
+  const _setPoint = useCallback(
+    (mode, point) => {
+      if (mode === SELECTION_MODES.START) {
+        setStartPoint(point);
+        setRoute(EMPTY_ROUTE);
+      } else if (mode === SELECTION_MODES.END) {
+        setEndPoint(point);
+        setRoute(EMPTY_ROUTE);
+      }
+    },
+    []
+  );
 
-  const addPoint = (point) => {
-    const pointWithRole = {
-      ...point,
-      role: selectionMode,
-    };
+  const addPoint = useCallback(
+    (point) => {
+      const pointWithRole = {
+        latitude: point.lat,
+        longitude: point.lng,
+        role: selectionMode,
+      };
+      _setPoint(selectionMode, pointWithRole);
+      setStatus(ROUTE_STATUS.IDLE);
+      setErrorMessage("");
+    },
+    [selectionMode, _setPoint]
+  );
 
-    if (selectionMode === SELECTION_MODES.START) {
-      setStartPoint(pointWithRole);
-    } else if (selectionMode === SELECTION_MODES.END) {
-      setEndPoint(pointWithRole);
-    } else {
-      setWaypoints((current) => [...current, pointWithRole]);
-    }
-
-    setOrderedPoints([]);
-  };
-
-  const removePoint = (role, index) => {
+  const removePoint = useCallback((role) => {
     if (role === SELECTION_MODES.START) {
       setStartPoint(null);
     } else if (role === SELECTION_MODES.END) {
       setEndPoint(null);
-    } else {
-      setWaypoints((current) => current.filter((_, currentIndex) => currentIndex !== index));
     }
+    setRoute(EMPTY_ROUTE);
+    setStatus(ROUTE_STATUS.IDLE);
+    setErrorMessage("");
+  }, []);
 
-    setOrderedPoints([]);
-  };
-
-  const clearPoints = () => {
+  const clearAll = useCallback(() => {
     setStartPoint(null);
     setEndPoint(null);
-    setWaypoints([]);
-    setOrderedPoints([]);
-  };
+    setRoute(EMPTY_ROUTE);
+    setStatus(ROUTE_STATUS.IDLE);
+    setErrorMessage("");
+  }, []);
 
-  const setRouteResult = (points) => {
-    setOrderedPoints(points);
-  };
+  const beginRouteRequest = useCallback(() => {
+    setStatus(ROUTE_STATUS.LOADING);
+    setErrorMessage("");
+  }, []);
+
+  const completeRouteRequest = useCallback((response) => {
+    setRoute(response);
+    setStatus(ROUTE_STATUS.SUCCESS);
+    setErrorMessage("");
+  }, []);
+
+  const failRouteRequest = useCallback((message) => {
+    setStatus(ROUTE_STATUS.ERROR);
+    setErrorMessage(message || "Có lỗi xảy ra khi tìm đường.");
+  }, []);
+
+  const canFindRoute =
+    Boolean(startPoint && endPoint) &&
+    (status === ROUTE_STATUS.IDLE || status === ROUTE_STATUS.ERROR || status === ROUTE_STATUS.SUCCESS);
 
   return {
     selectionMode,
     setSelectionMode,
     startPoint,
     endPoint,
-    waypoints,
-    selectedPoints,
-    orderedPoints,
+    route,
+    status,
+    errorMessage,
+    bounds,
+    canFindRoute,
     addPoint,
     removePoint,
-    clearPoints,
-    setRouteResult,
+    clearAll,
+    beginRouteRequest,
+    completeRouteRequest,
+    failRouteRequest,
   };
 }

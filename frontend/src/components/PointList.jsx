@@ -5,26 +5,29 @@ function PointDetails({ point }) {
   if (!point) {
     return <p className="empty-text">Chưa chọn.</p>;
   }
-
   return (
     <div className="point-coords">
-      Lat: {point.lat.toFixed(6)}, Lng: {point.lng.toFixed(6)}
+      Lat: {point.latitude.toFixed(6)}, Lng: {point.longitude.toFixed(6)}
     </div>
   );
 }
 
-export default function PointList({ startPoint, endPoint, waypoints, onRemovePoint }) {
+export default function PointList({ startPoint, endPoint, onRemovePoint }) {
   return (
     <div className="panel-card">
-      <h2>Route A → B</h2>
+      <h2>Điểm Start / End</h2>
 
       <div className="point-section point-section-start">
         <div>
-          <strong>Start A</strong>
+          <strong>Start</strong>
           <PointDetails point={startPoint} />
         </div>
         {startPoint ? (
-          <button className="icon-button" onClick={() => onRemovePoint(SELECTION_MODES.START)}>
+          <button
+            className="icon-button"
+            onClick={() => onRemovePoint(SELECTION_MODES.START)}
+            type="button"
+          >
             Xóa
           </button>
         ) : null}
@@ -32,34 +35,19 @@ export default function PointList({ startPoint, endPoint, waypoints, onRemovePoi
 
       <div className="point-section point-section-end">
         <div>
-          <strong>End B</strong>
+          <strong>End</strong>
           <PointDetails point={endPoint} />
         </div>
         {endPoint ? (
-          <button className="icon-button" onClick={() => onRemovePoint(SELECTION_MODES.END)}>
+          <button
+            className="icon-button"
+            onClick={() => onRemovePoint(SELECTION_MODES.END)}
+            type="button"
+          >
             Xóa
           </button>
         ) : null}
       </div>
-
-      <h3>Waypoints</h3>
-      {waypoints.length === 0 ? (
-        <p className="empty-text">Chưa có waypoint trung gian.</p>
-      ) : (
-        <ul className="point-list">
-          {waypoints.map((point, index) => (
-            <li key={`${point.lat}-${point.lng}-${index}`} className="point-item">
-              <div>
-                <strong>Waypoint {index + 1}</strong>
-                <PointDetails point={point} />
-              </div>
-              <button className="icon-button" onClick={() => onRemovePoint(SELECTION_MODES.WAYPOINT, index)}>
-                Xóa
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
     </div>
   );
 }

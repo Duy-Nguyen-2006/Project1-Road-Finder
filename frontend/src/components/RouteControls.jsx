@@ -1,10 +1,9 @@
 import React from "react";
-import { SELECTION_MODES } from "../hooks/useRoutePoints";
+import { SELECTION_MODES, ROUTE_STATUS } from "../hooks/useRoutePoints";
 
 const MODE_LABELS = {
-  [SELECTION_MODES.START]: "Set Start A",
-  [SELECTION_MODES.END]: "Set End B",
-  [SELECTION_MODES.WAYPOINT]: "Add Waypoint",
+  [SELECTION_MODES.START]: "Start",
+  [SELECTION_MODES.END]: "End",
 };
 
 export default function RouteControls({
@@ -12,22 +11,29 @@ export default function RouteControls({
   onSelectionModeChange,
   startPoint,
   endPoint,
-  selectedPoints,
-  onOptimize,
+  status,
+  boundsLoaded,
+  onFindRoute,
   onClear,
-  isOptimizing,
 }) {
-  const canOptimize = Boolean(startPoint && endPoint);
+  const canFind =
+    Boolean(startPoint && endPoint) &&
+    boundsLoaded &&
+    status !== ROUTE_STATUS.LOADING;
+
+  const isLoading = status === ROUTE_STATUS.LOADING;
 
   return (
     <div className="panel-card controls-card">
       <h2>Điều khiển</h2>
 
-      <div className="mode-button-group" aria-label="Route point selection mode">
+      <div className="mode-button-group" aria-label="Chế độ chọn điểm">
         {Object.values(SELECTION_MODES).map((mode) => (
           <button
             key={mode}
-            className={selectionMode === mode ? "mode-button active" : "mode-button"}
+            className={
+              selectionMode === mode ? "mode-button active" : "mode-button"
+            }
             onClick={() => onSelectionModeChange(mode)}
             type="button"
           >
@@ -36,17 +42,33 @@ export default function RouteControls({
         ))}
       </div>
 
-      <p className="helper-text">Mode hiện tại: <strong>{MODE_LABELS[selectionMode]}</strong>. Chọn mode rồi click trên map.</p>
+      <p className="helper-text">
+        Đang chọn: <strong>{MODE_LABELS[selectionMode]}</strong>. Click lên map
+        trong vùng bbox đỏ để đặt điểm.
+      </p>
 
-      <button className="primary-button" onClick={onOptimize} disabled={!canOptimize || isOptimizing}>
-        {isOptimizing ? "Đang tối ưu..." : "Optimize Route A → B"}
+      <button
+        className="primary-button"
+        onClick={onFindRoute}
+        disabled={!canFind}
+        type="button"
+      >
+        {isLoading ? "Đang tìm đường..." : "Find Shortest Path"}
       </button>
-      <button className="secondary-button" onClick={onClear} disabled={selectedPoints.length === 0 || isOptimizing}>
+      <button
+        className="secondary-button"
+        onClick={onClear}
+        disabled={!startPoint && !endPoint}
+        type="button"
+      >
         Clear
       </button>
-      <p className="helper-text">
-        {canOptimize ? "Đã có Start và End, có thể tìm route." : "Cần chọn đủ Start A và End B để tìm route."}
-      </p>
+
+      {!boundsLoaded ? (
+        <p className="error-text">Đang tải vùng hỗ trợ từ backend...</p>
+      ) : !canFind ? (
+        <p className="helper-text">Cần chọn Start và End trong vùng bbox đỏ.</p>
+      ) : null}
     </div>
   );
 }

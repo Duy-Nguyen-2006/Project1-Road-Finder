@@ -1,66 +1,136 @@
-import React from "react";
-import { useMutation } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import React, { useCallback, useMemo } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import MapView from "./components/MapView";
 import PointList from "./components/PointList";
 import RouteControls from "./components/RouteControls";
-import { optimizeRoute } from "./api/routeApi";
-import { toBackendPoint, toLeafletPoint } from "./types/point";
-import { useRoutePoints } from "./hooks/useRoutePoints";
+import { findShortestPath, getGraphBounds } from "./api/routeApi";
+import { isInsideBbox } from "./utils/geo";
+import { formatDistance } from "./utils/format";
+import {
+  ROUTE_STATUS,
+  SELECTION_MODES,
+  useRoutePoints,
+} from "./hooks/useRoutePoints";
+
+const ACCEPTED_AREA_MESSAGE = "Error: Not in accepted area";
 
 export default function App() {
+  const queryClient = useQueryClient();
   const {
     selectionMode,
     setSelectionMode,
     startPoint,
     endPoint,
-    waypoints,
-    selectedPoints,
-    orderedPoints,
+    route,
+    status,
+    errorMessage,
+    bounds,
+    canFindRoute,
     addPoint,
     removePoint,
-    clearPoints,
-    setRouteResult,
-  } = useRoutePoints();
-  const [errorMessage, setErrorMessage] = useState("");
+    clearAll,
+    beginRouteRequest,
+    completeRouteRequest,
+    failRouteRequest,
+  } = useRoutePoints({ bounds: null });
+
+  const boundsQuery = useQuery({
+    queryKey: ["graph-bounds"],
+    queryFn: getGraphBounds,
+    staleTime: Infinity,
+    retry: 1,
+  });
+
+  const boundsLoaded = boundsQuery.isSuccess && Boolean(boundsQuery.data?.bbox);
+  const boundsError =
+    boundsQuery.isError && boundsQuery.error
+      ? boundsQuery.error.message
+      : "";
+  const bbox = boundsLoaded ? boundsQuery.data.bbox : null;
 
   const mutation = useMutation({
-    mutationFn: async () => {
-      const payload = selectedPoints.map(toBackendPoint);
-      const result = await optimizeRoute(payload);
-      return result;
+    mutationFn: findShortestPath,
+    onMutate: () => {
+      beginRouteRequest();
     },
     onSuccess: (data) => {
-      const routePoints = (data.ordered_points || []).map(toLeafletPoint);
-      setRouteResult(routePoints);
-      setErrorMessage("");
+      completeRouteRequest(data);
     },
     onError: (error) => {
-      setErrorMessage(error.message || "Có lỗi xảy ra khi gọi backend.");
+      failRouteRequest(error?.message || "Có lỗi xảy ra khi tìm đường.");
     },
   });
 
-  const handleOptimize = () => {
-    if (!startPoint || !endPoint) {
-      setErrorMessage("Cần chọn đủ Start A và End B trước khi tối ưu route.");
-      return;
-    }
-    mutation.mutate();
-  };
+  const handleAddPoint = useCallback(
+    (rawPoint) => {
+      if (!boundsLoaded) return;
+      const candidate = {
+        latitude: rawPoint.lat,
+        longitude: rawPoint.lng,
+      };
+      if (!isInsideBbox(candidate, bbox)) {
+        failRouteRequest(ACCEPTED_AREA_MESSAGE);
+        return;
+      }
+      addPoint(candidate);
+    },
+    [addPoint, bbox, boundsLoaded, failRouteRequest]
+  );
 
-  const routePreviewCount = useMemo(() => orderedPoints.length, [orderedPoints]);
-  const waypointCount = waypoints.length;
+  const handleFindRoute = useCallback(() => {
+    if (!startPoint || !endPoint) return;
+    mutation.mutate({
+      start: { latitude: startPoint.latitude, longitude: startPoint.longitude },
+      end: { latitude: endPoint.latitude, longitude: endPoint.longitude },
+    });
+  }, [endPoint, mutation, startPoint]);
+
+  const handleClear = useCallback(() => {
+    clearAll();
+  }, [clearAll]);
+
+  const handleRemovePoint = useCallback(
+    (role) => {
+      removePoint(role);
+    },
+    [removePoint]
+  );
+
+  const selectionEnabled = boundsLoaded;
+
+  const distanceText = useMemo(
+    () => (route && typeof route.distance === "number" ? formatDistance(route.distance) : null),
+    [route]
+  );
+
+  const statusText = useMemo(() => {
+    if (!boundsLoaded) return "Đang tải vùng hỗ trợ từ backend...";
+    if (status === ROUTE_STATUS.LOADING) return "Đang tìm đường...";
+    if (status === ROUTE_STATUS.SUCCESS && distanceText) {
+      return `Đã tìm được đường đi (${distanceText}).`;
+    }
+    if (status === ROUTE_STATUS.ERROR) return errorMessage;
+    if (boundsError) return `Lỗi tải vùng hỗ trợ: ${boundsError}`;
+    return "Chọn Start và End trong vùng bbox đỏ, sau đó bấm Find Shortest Path.";
+  }, [boundsError, boundsLoaded, distanceText, errorMessage, status]);
 
   return (
     <div className="app-shell">
       <header className="app-header">
         <h1>Road Finder</h1>
-        <p>Chọn điểm A, điểm B và waypoint trung gian để tìm lộ trình.</p>
+        <p>Chọn Start và End trong vùng bbox đỏ của TP.HCM, bấm Find Shortest Path.</p>
       </header>
 
       <main className="app-content">
         <section className="map-panel">
-          <MapView selectedPoints={selectedPoints} orderedPoints={orderedPoints} onAddPoint={addPoint} />
+          <MapView
+            bounds={bbox}
+            startPoint={startPoint}
+            endPoint={endPoint}
+            routePoints={route?.route_points}
+            selectionEnabled={selectionEnabled}
+            onAddPoint={handleAddPoint}
+          />
         </section>
 
         <aside className="side-panel">
@@ -69,19 +139,40 @@ export default function App() {
             onSelectionModeChange={setSelectionMode}
             startPoint={startPoint}
             endPoint={endPoint}
-            selectedPoints={selectedPoints}
-            onOptimize={handleOptimize}
-            onClear={clearPoints}
-            isOptimizing={mutation.isPending}
+            status={status}
+            boundsLoaded={boundsLoaded}
+            onFindRoute={handleFindRoute}
+            onClear={handleClear}
           />
 
-          <PointList startPoint={startPoint} endPoint={endPoint} waypoints={waypoints} onRemovePoint={removePoint} />
+          <PointList
+            startPoint={startPoint}
+            endPoint={endPoint}
+            onRemovePoint={handleRemovePoint}
+          />
 
           <div className="panel-card">
             <h2>Kết quả</h2>
-            <p>Số điểm route hiện tại: {routePreviewCount}</p>
-            <p>Số waypoint trung gian: {waypointCount}</p>
-            {errorMessage ? <p className="error-text">{errorMessage}</p> : <p className="helper-text">Sẵn sàng nhận dữ liệu từ backend.</p>}
+            {status === ROUTE_STATUS.SUCCESS && route ? (
+              <>
+                <p>
+                  <strong>Quãng đường:</strong> {distanceText}
+                </p>
+                <p className="helper-text">
+                  Từ node {route.start_node_id} đến node {route.end_node_id}.
+                </p>
+              </>
+            ) : (
+              <p
+                className={
+                  status === ROUTE_STATUS.ERROR || boundsError
+                    ? "error-text"
+                    : "helper-text"
+                }
+              >
+                {statusText}
+              </p>
+            )}
           </div>
         </aside>
       </main>
