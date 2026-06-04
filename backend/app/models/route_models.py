@@ -1,6 +1,24 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.models.point import Point
+
+
+class ShortestPathRequest(BaseModel):
+    start: Point
+    end: Point
+
+
+class ShortestPathResponse(BaseModel):
+    route_points: list[Point]
+    distance: float = Field(gt=0)
+    start_node_id: str
+    end_node_id: str
+
+
+class GraphBoundsResponse(BaseModel):
+    bbox: dict[str, float]
+    max_snap_distance_meters: float
+    graph_version: str
 
 
 class OptimizeRouteRequest(BaseModel):
@@ -8,43 +26,7 @@ class OptimizeRouteRequest(BaseModel):
 
 
 class OptimizeRouteResponse(BaseModel):
-    ordered_points: list[Point]
-
-
-# Example:
-#
-# Frontend sends this request to backend:
-# {
-#     "points": [
-#         {
-#             "latitude": 10.762622,
-#             "longitude": 106.660172
-#         },
-#         {
-#             "latitude": 10.776889,
-#             "longitude": 106.700806
-#         },
-#         {
-#             "latitude": 10.779783,
-#             "longitude": 106.699018
-#         }
-#     ]
-# }
-#
-# Backend returns this response to frontend:
-# {
-#     "ordered_points": [
-#         {
-#             "latitude": 10.762622,
-#             "longitude": 106.660172
-#         },
-#         {
-#             "latitude": 10.779783,
-#             "longitude": 106.699018
-#         },
-#         {
-#             "latitude": 10.776889,
-#             "longitude": 106.700806
-#         }
-#     ]
-# }
+    route_points: list[Point]
+    distance: float = Field(gt=0)
+    start_node_id: str
+    end_node_id: str

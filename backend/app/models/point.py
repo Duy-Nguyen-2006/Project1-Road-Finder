@@ -1,12 +1,6 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-# pydantic to validate data
-# Example data from frontend:
-# {
-#     "latitude": 10.762622,
-#     "longitude": 106.660172
-# }
+
 class Point(BaseModel):
-
-    latitude: float
-    longitude: float
+    latitude: float = Field(ge=-90.0, le=90.0)
+    longitude: float = Field(ge=-180.0, le=180.0)

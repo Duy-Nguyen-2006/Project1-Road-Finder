@@ -1,73 +1,66 @@
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 
+from app.application.graph_bounds import build_graph_bounds_payload
 from app.application.health import build_health_payload
-from app.models.route_models import OptimizeRouteRequest, OptimizeRouteResponse
-from app.services.tsp_service import optimize_points
-from app.services.osm_service import fetch_intersections_in_city
+from app.domain.errors import AcceptedAreaError, NoRouteError
+from app.http.route_errors import http_exception_for_domain_error
+from app.models.route_models import (
+    GraphBoundsResponse,
+    OptimizeRouteRequest,
+    OptimizeRouteResponse,
+    ShortestPathRequest,
+    ShortestPathResponse,
+)
+from app.services.route_computation import compute_shortest_path_response
 
 router = APIRouter()
 
-# Global module-level memory cache for real-world OSM intersection nodes
-_intersections_cache = None
 
-
-def get_cached_intersections():
-    """
-    Retrieve or initialize the cached list of OSM intersection nodes.
-    Caches Ho Chi Minh City intersections (with core urban bounding box)
-    to prevent slow, rate-limited public API queries on every route request.
-    """
-    global _intersections_cache
-    if _intersections_cache is None:
-        try:
-            # Default bounding box for Ho Chi Minh City core urban area (matches frontend)
-            bbox_tuple = (10.70, 106.60, 10.85, 106.80)
-            print("Initializing backend intersections cache from OpenStreetMap Overpass API...")
-            _intersections_cache = fetch_intersections_in_city("Ho Chi Minh City", bbox_tuple)
-            print(f"Successfully cached {len(_intersections_cache)} intersections.")
-        except Exception as e:
-            print(f"Warning: Failed to fetch intersections for cache: {e}")
-            _intersections_cache = []
-    return _intersections_cache
+def _runtime(request: Request):
+    return request.app.state.graph_runtime
 
 
 @router.get("/health")
 def health_check(request: Request) -> dict:
-    runtime = request.app.state.graph_runtime
-    return build_health_payload(runtime)
+    return build_health_payload(_runtime(request))
 
 
-@router.post("/optimize-route")
-def optimize_route(data_from_fe: OptimizeRouteRequest) -> OptimizeRouteResponse:
-    intersections = get_cached_intersections() if len(data_from_fe.points) > 2 else []
-    route_result = optimize_points(data_from_fe.points, intersections)
-
-    return OptimizeRouteResponse(ordered_points=route_result)
+@router.get("/graph-bounds", response_model=GraphBoundsResponse)
+def graph_bounds(request: Request) -> GraphBoundsResponse:
+    payload = build_graph_bounds_payload(_runtime(request))
+    return GraphBoundsResponse(**payload)
 
 
-@router.get("/intersections")
-def get_intersections(city_name: str = "Ho Chi Minh City", bbox: str = None) -> dict:
-    """
-    Fetch all intersections (ngã tư, ngã ba) from OpenStreetMap for a given city.
-    Returns a list of points with latitude and longitude.
-    
-    Query params:
-    - city_name: Name of the city (default: Ho Chi Minh City)
-    - bbox: Optional bounding box as "min_lat,min_lon,max_lat,max_lon"
-    """
-    bbox_tuple = None
-    if bbox:
-        try:
-            parts = bbox.split(',')
-            bbox_tuple = tuple(float(x) for x in parts)
-        except (ValueError, IndexError):
-            return {"error": "Invalid bbox format. Use: min_lat,min_lon,max_lat,max_lon"}
-            
-    # If the requested query matches the cached region, return from cache directly
-    if not bbox and city_name == "Ho Chi Minh City":
-        cached = get_cached_intersections()
-        if cached:
-            return {"intersections": cached}
-            
-    intersections = fetch_intersections_in_city(city_name, bbox_tuple)
-    return {"intersections": intersections}
+@router.post("/shortest-path", response_model=ShortestPathResponse)
+def shortest_path(
+    request: Request, body: ShortestPathRequest
+) -> ShortestPathResponse:
+    try:
+        return compute_shortest_path_response(
+            _runtime(request), body.start, body.end
+        )
+    except (AcceptedAreaError, NoRouteError) as exc:
+        raise http_exception_for_domain_error(exc) from exc
+
+
+@router.post("/optimize-route", response_model=OptimizeRouteResponse)
+def optimize_route(
+    request: Request, body: OptimizeRouteRequest
+) -> OptimizeRouteResponse:
+    if len(body.points) != 2:
+        raise HTTPException(
+            status_code=422,
+            detail="optimize-route requires exactly two points",
+        )
+    try:
+        result = compute_shortest_path_response(
+            _runtime(request), body.points[0], body.points[1]
+        )
+    except (AcceptedAreaError, NoRouteError) as exc:
+        raise http_exception_for_domain_error(exc) from exc
+    return OptimizeRouteResponse(
+        route_points=result.route_points,
+        distance=result.distance,
+        start_node_id=result.start_node_id,
+        end_node_id=result.end_node_id,
+    )
