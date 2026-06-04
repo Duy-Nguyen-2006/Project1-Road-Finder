@@ -1,4 +1,4 @@
 fastapi
 uvicorn[standard]
 pydantic
-requests
+requests  # test-only: used by tests/integration/test_no_external_runtime.py to monkey-patch external HTTP
