@@ -1,5 +1,6 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
+from app.application.health import build_health_payload
 from app.models.route_models import OptimizeRouteRequest, OptimizeRouteResponse
 from app.services.tsp_service import optimize_points
 from app.services.osm_service import fetch_intersections_in_city
@@ -31,15 +32,14 @@ def get_cached_intersections():
 
 
 @router.get("/health")
-def health_check() -> dict[str, str]:
-    return {"status": "ok"}
+def health_check(request: Request) -> dict:
+    runtime = request.app.state.graph_runtime
+    return build_health_payload(runtime)
 
 
 @router.post("/optimize-route")
 def optimize_route(data_from_fe: OptimizeRouteRequest) -> OptimizeRouteResponse:
-    # Snap the input coordinates to the closest real-world intersection nodes,
-    # then run the custom Branch & Bound TSP solver on the snapped coordinates.
-    intersections = get_cached_intersections()
+    intersections = get_cached_intersections() if len(data_from_fe.points) > 2 else []
     route_result = optimize_points(data_from_fe.points, intersections)
 
     return OptimizeRouteResponse(ordered_points=route_result)
