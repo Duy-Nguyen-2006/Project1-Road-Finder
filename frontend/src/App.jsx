@@ -130,7 +130,7 @@ export default function App() {
             status={status}
             boundsLoaded={boundsLoaded}
             onFindRoute={handleFindRoute}
-            onClear={handleClear}
+            onClear={clearAll}
           />
 
           <PointList
