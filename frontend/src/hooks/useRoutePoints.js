@@ -38,8 +38,8 @@ export function useRoutePoints() {
   const addPoint = useCallback(
     (point) => {
       const pointWithRole = {
-        latitude: point.lat,
-        longitude: point.lng,
+        latitude: point.latitude,
+        longitude: point.longitude,
         role: selectionMode,
       };
       _setPoint(selectionMode, pointWithRole);
