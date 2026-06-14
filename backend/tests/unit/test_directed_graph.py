@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from app.domain.cost_model import RoutingOptions
-from app.domain.graph import build_directed_adjacency
+from app.domain.graph import build_directed_adjacency, build_reverse_adjacency
 from app.infrastructure.graph_loader import load_graph_data
 
 FIXTURE_GRAPH_PATH = (
@@ -30,6 +30,22 @@ def _write_graph(tmp_path: Path, nodes: dict, edges: list) -> Path:
     }
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
+
+
+def test_reverse_adjacency_inverts_oneway(tmp_path):
+    path = _write_graph(
+        tmp_path,
+        nodes={
+            "a": {"latitude": 1.0, "longitude": 1.0},
+            "b": {"latitude": 2.0, "longitude": 2.0},
+        },
+        edges=[{"from": "a", "to": "b", "distance": 100.0, "oneway": True}],
+    )
+    graph = load_graph_data(path)
+    adj = build_directed_adjacency(graph)
+    rev = build_reverse_adjacency(adj)
+    assert ("a", 100.0) in rev["b"]
+    assert rev["a"] == []
 
 
 def test_oneway_edge_only_adds_forward_direction(tmp_path):

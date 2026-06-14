@@ -43,10 +43,6 @@ export async function getGraphBounds() {
   return response.json();
 }
 
-export async function findShortestPath({ start, end }) {
-  return postJson(`${API_BASE_URL}/route`, { start, end });
-}
-
 export async function postRoute({ start, end, options }) {
   return postJson(`${API_BASE_URL}/route`, { start, end, options });
 }

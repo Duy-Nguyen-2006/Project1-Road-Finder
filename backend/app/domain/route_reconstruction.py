@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.application.graph_runtime import GraphRuntime
+from app.domain.protocols import NodeCoordinateLookup
 
 _COORD_TOLERANCE = 1e-9
 
@@ -51,7 +51,7 @@ def compute_total_distance_meters(
 
 
 def reconstruct_route_points(
-    runtime: GraphRuntime,
+    lookup: NodeCoordinateLookup,
     *,
     clicked_start: tuple[float, float],
     clicked_end: tuple[float, float],
@@ -66,11 +66,8 @@ def reconstruct_route_points(
     end_coord = RouteCoordinate(latitude=clicked_end[0], longitude=clicked_end[1])
 
     graph_coords = [
-        RouteCoordinate(
-            latitude=runtime.nodes[nid].latitude,
-            longitude=runtime.nodes[nid].longitude,
-        )
-        for nid in dijkstra_node_ids
+        RouteCoordinate(latitude=lat, longitude=lon)
+        for lat, lon in (lookup.node_coordinate(nid) for nid in dijkstra_node_ids)
     ]
 
     raw: list[RouteCoordinate] = [start_coord] + graph_coords + [end_coord]
@@ -78,7 +75,7 @@ def reconstruct_route_points(
 
 
 def reconstruct_route(
-    runtime: GraphRuntime,
+    lookup: NodeCoordinateLookup,
     *,
     clicked_start: tuple[float, float],
     clicked_end: tuple[float, float],
@@ -88,7 +85,7 @@ def reconstruct_route(
     graph_distance_meters: float,
 ) -> ReconstructedRoute:
     route_points = reconstruct_route_points(
-        runtime,
+        lookup,
         clicked_start=clicked_start,
         clicked_end=clicked_end,
         start_snap_distance_meters=start_snap_distance_meters,

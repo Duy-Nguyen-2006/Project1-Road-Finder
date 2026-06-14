@@ -130,6 +130,77 @@ def test_prefers_shorter_competing_route(tmp_path):
     assert result.graph_distance_meters == pytest.approx(2.0)
 
 
+def test_oneway_requires_forward_only_path(tmp_path):
+    """Backward search must use reverse adjacency; direct oneway is the only route."""
+    path = _write_graph(
+        tmp_path,
+        nodes={
+            "s": {"latitude": 0.0, "longitude": 0.0},
+            "m": {"latitude": 0.5, "longitude": 0.0},
+            "t": {"latitude": 1.0, "longitude": 0.0},
+        },
+        edges=[
+            {"from": "s", "to": "m", "distance": 10.0, "oneway": True},
+            {"from": "m", "to": "t", "distance": 20.0, "oneway": True},
+        ],
+    )
+    rt = build_graph_runtime(path)
+    result = bidirectional_dijkstra(
+        rt.adjacency,
+        "s",
+        "t",
+        reverse_adjacency=rt.reverse_adjacency_for(),
+    )
+    assert result.node_ids == ["s", "m", "t"]
+    assert result.graph_distance_meters == pytest.approx(30.0)
+
+
+def test_oneway_reverse_direction_has_no_route(tmp_path):
+    path = _write_graph(
+        tmp_path,
+        nodes={
+            "s": {"latitude": 0.0, "longitude": 0.0},
+            "t": {"latitude": 1.0, "longitude": 0.0},
+        },
+        edges=[{"from": "s", "to": "t", "distance": 5.0, "oneway": True}],
+    )
+    rt = build_graph_runtime(path)
+    with pytest.raises(NoRouteError):
+        bidirectional_dijkstra(
+            rt.adjacency,
+            "t",
+            "s",
+            reverse_adjacency=rt.reverse_adjacency_for(),
+        )
+
+
+def test_oneway_detour_via_bidirectional_edge(tmp_path):
+    """Return leg uses bidirectional edge; forward leg uses oneway."""
+    path = _write_graph(
+        tmp_path,
+        nodes={
+            "s": {"latitude": 0.0, "longitude": 0.0},
+            "mid": {"latitude": 0.5, "longitude": 0.0},
+            "t": {"latitude": 1.0, "longitude": 0.0},
+        },
+        edges=[
+            {"from": "s", "to": "mid", "distance": 1.0, "oneway": True},
+            {"from": "mid", "to": "t", "distance": 1.0, "oneway": True},
+            {"from": "t", "to": "mid", "distance": 100.0, "oneway": False},
+            {"from": "mid", "to": "s", "distance": 100.0, "oneway": False},
+        ],
+    )
+    rt = build_graph_runtime(path)
+    result = bidirectional_dijkstra(
+        rt.adjacency,
+        "s",
+        "t",
+        reverse_adjacency=rt.reverse_adjacency_for(),
+    )
+    assert result.node_ids == ["s", "mid", "t"]
+    assert result.graph_distance_meters == pytest.approx(2.0)
+
+
 def test_no_route_error_detail_for_api_mapping():
     err = NoRouteError()
     assert str(err) == "No route found between selected points"

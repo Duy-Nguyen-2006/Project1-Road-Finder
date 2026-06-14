@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from app.domain.graph_types import (
+    GraphBBox,
+    GraphEdge,
+    GraphMetadata,
+    GraphNode,
+    ValidatedGraph,
+)
 
 DEFAULT_GRAPH_PATH = Path(__file__).resolve().parents[1] / "data" / "road_graph.json"
 
@@ -17,44 +24,6 @@ BBOX_FIELDS = (
 
 class GraphValidationError(ValueError):
     """Raised when graph JSON does not satisfy SPEC section 9 rules."""
-
-
-@dataclass(frozen=True)
-class GraphBBox:
-    min_latitude: float
-    min_longitude: float
-    max_latitude: float
-    max_longitude: float
-
-
-@dataclass(frozen=True)
-class GraphMetadata:
-    graph_version: str
-    bbox: GraphBBox
-    max_snap_distance_meters: float
-
-
-@dataclass(frozen=True)
-class GraphNode:
-    latitude: float
-    longitude: float
-
-
-@dataclass(frozen=True)
-class GraphEdge:
-    from_node: str
-    to_node: str
-    distance: float
-    oneway: bool = False
-    road_type: str = "default"
-
-
-@dataclass(frozen=True)
-class ValidatedGraph:
-    metadata: GraphMetadata
-    nodes: dict[str, GraphNode]
-    edges: list[GraphEdge]
-
 
 def load_graph_data(path: Path | str = DEFAULT_GRAPH_PATH) -> ValidatedGraph:
     graph_path = Path(path)

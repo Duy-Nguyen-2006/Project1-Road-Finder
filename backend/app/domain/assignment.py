@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.application.cost_matrix import CostMatrix
+from app.domain.protocols import DistanceProvider
 
 
 @dataclass(frozen=True)
 class ShipperRoute:
     shipper_id: str
-    legs: list[tuple[str, str, float]]  # (kind, path, distance)
+    legs: list[tuple[str, list[str], float]]  # (kind, path_node_ids, distance)
     total_distance_meters: float
     feasible: bool
 
@@ -24,7 +24,7 @@ def rank_shippers_for_order(
     shipper_nodes: dict[str, str],  # shipper_id -> node_id
     pickup_node: str,
     dropoff_node: str,
-    cost_matrix: CostMatrix,
+    cost_matrix: DistanceProvider,
 ) -> AssignmentResult:
     """Rank shippers by total distance for a single order.
 

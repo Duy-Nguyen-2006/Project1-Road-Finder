@@ -38,30 +38,14 @@ def test_health_graph_bounds_and_routes_without_external_http(client):
     assert health.status_code == 200
     assert health.json()["graph"]["loaded"] is True
 
-    bounds = client.get("/graph-bounds")
+    bounds = client.get("/graph/bounds")
     assert bounds.status_code == 200
     assert bounds.json()["max_snap_distance_meters"] == 200
 
-    shortest = client.post(
-        "/shortest-path",
+    route = client.post(
+        "/route",
         json={"start": VALID_START, "end": VALID_END},
     )
-    assert shortest.status_code == 200
-    assert shortest.json()["distance"] > 0
-    assert "ordered_points" not in shortest.json()
-
-    legacy = client.post(
-        "/optimize-route",
-        json={"points": [VALID_START, VALID_END]},
-    )
-    assert legacy.status_code == 200
-    assert legacy.json()["route_points"] == shortest.json()["route_points"]
-    assert "ordered_points" not in legacy.json()
-
-
-def test_optimize_route_rejects_non_two_with_external_blocked(client):
-    response = client.post(
-        "/optimize-route",
-        json={"points": [VALID_START, VALID_END, VALID_START]},
-    )
-    assert response.status_code == 422
+    assert route.status_code == 200
+    assert route.json()["distance"] > 0
+    assert len(route.json()["route_points"]) >= 2

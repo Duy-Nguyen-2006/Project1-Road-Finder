@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 
 from app.application.cost_matrix import CostMatrix
 from app.application.graph_bounds import build_graph_bounds_payload
@@ -6,7 +6,8 @@ from app.application.health import build_health_payload
 from app.domain.assignment import rank_shippers_for_order
 from app.domain.cost_model import RoutingOptions
 from app.domain.errors import AcceptedAreaError, NoRouteError
-from app.domain.snapper import snap_point
+from app.application.node_lookup import GraphNodeLookup
+from app.application.snap_service import snap_point
 from app.domain.tsp import Stop, optimize_tour
 from app.domain.vrp import solve_vrp
 from app.http.route_errors import http_exception_for_domain_error
@@ -18,19 +19,18 @@ from app.models.route_models import (
     FleetResponse,
     FleetTourResponse,
     GraphBoundsResponse,
-    LegResponse,
-    OptimizeRouteRequest,
-    OptimizeRouteResponse,
     RouteRequest,
     RouteResponse,
     ShipperRouteResponse,
-    ShortestPathRequest,
-    ShortestPathResponse,
     StopResponse,
     TourRequest,
     TourResponse,
 )
 from app.services.route_computation import compute_shortest_path_response
+from app.services.tour_response_builder import (
+    build_assignment_leg,
+    build_tour_legs,
+)
 
 router = APIRouter()
 
@@ -49,13 +49,6 @@ def _to_routing_options(options_req) -> RoutingOptions:
 @router.get("/health")
 def health_check(request: Request) -> dict:
     return build_health_payload(_runtime(request))
-
-
-@router.get("/graph-bounds", response_model=GraphBoundsResponse)
-def graph_bounds_legacy(request: Request) -> GraphBoundsResponse:
-    """Legacy endpoint. Use GET /graph/bounds instead."""
-    payload = build_graph_bounds_payload(_runtime(request))
-    return GraphBoundsResponse(**payload)
 
 
 @router.get("/graph/bounds", response_model=GraphBoundsResponse)
@@ -87,14 +80,18 @@ def assignments(request: Request, body: AssignmentRequest) -> AssignmentResponse
     try:
         cost_matrix = CostMatrix(runtime, options)
 
-        # Snap all points
+        lookup = GraphNodeLookup(runtime.nodes)
         shipper_nodes = {}
+        shipper_snaps = {}
         for s in body.shippers:
             snap = snap_point(runtime, s.location.latitude, s.location.longitude)
             shipper_nodes[s.id] = snap.node_id
+            shipper_snaps[s.id] = (snap, (s.location.latitude, s.location.longitude))
 
         pickup_snap = snap_point(runtime, body.order.pickup.latitude, body.order.pickup.longitude)
         dropoff_snap = snap_point(runtime, body.order.dropoff.latitude, body.order.dropoff.longitude)
+        pickup_click = (body.order.pickup.latitude, body.order.pickup.longitude)
+        dropoff_click = (body.order.dropoff.latitude, body.order.dropoff.longitude)
 
         # Pre-compute distances
         all_nodes = list(shipper_nodes.values()) + [pickup_snap.node_id, dropoff_snap.node_id]
@@ -113,20 +110,43 @@ def assignments(request: Request, body: AssignmentRequest) -> AssignmentResponse
         ranking = []
         for sr in result.ranking:
             legs = []
-            for kind, path_nodes, dist in sr.legs:
-                route_points = []
-                for nid in path_nodes:
-                    node = runtime.nodes[nid]
-                    route_points.append(Point(latitude=node.latitude, longitude=node.longitude))
-                legs.append(LegResponse(
-                    kind=kind,
-                    distance_meters=dist,
-                    route_points=route_points,
-                ))
+            if sr.feasible and len(sr.legs) == 2:
+                snap, shipper_click = shipper_snaps[sr.shipper_id]
+                (_, path_pickup, dist_pickup) = sr.legs[0]
+                (_, path_drop, dist_drop) = sr.legs[1]
+                legs.append(
+                    build_assignment_leg(
+                        lookup,
+                        clicked_start=shipper_click,
+                        start_snap_distance_meters=snap.distance_meters,
+                        clicked_end=pickup_click,
+                        end_snap_distance_meters=0.0,
+                        path_node_ids=path_pickup,
+                        graph_distance_meters=dist_pickup,
+                        kind="to_pickup",
+                    )
+                )
+                legs.append(
+                    build_assignment_leg(
+                        lookup,
+                        clicked_start=pickup_click,
+                        start_snap_distance_meters=0.0,
+                        clicked_end=dropoff_click,
+                        end_snap_distance_meters=0.0,
+                        path_node_ids=path_drop,
+                        graph_distance_meters=dist_drop,
+                        kind="to_dropoff",
+                    )
+                )
+            total_m = (
+                sum(leg.distance_meters for leg in legs)
+                if legs
+                else sr.total_distance_meters
+            )
             ranking.append(ShipperRouteResponse(
                 shipper_id=sr.shipper_id,
                 feasible=sr.feasible,
-                total_distance_meters=sr.total_distance_meters,
+                total_distance_meters=total_m,
                 legs=legs,
             ))
 
@@ -144,19 +164,22 @@ def tours(request: Request, body: TourRequest) -> TourResponse:
     options = _to_routing_options(body.options)
 
     try:
+        lookup = GraphNodeLookup(runtime.nodes)
         cost_matrix = CostMatrix(runtime, options)
 
-        # Snap shipper location
         shipper_snap = snap_point(runtime, body.shipper.location.latitude, body.shipper.location.longitude)
+        shipper_click = (body.shipper.location.latitude, body.shipper.location.longitude)
 
-        # Build stops for each order
         stops: list[Stop] = []
+        stop_coordinates: dict[tuple[str, str], tuple[float, float]] = {}
         all_nodes = [shipper_snap.node_id]
         for order in body.orders:
             pickup_snap = snap_point(runtime, order.pickup.latitude, order.pickup.longitude)
             dropoff_snap = snap_point(runtime, order.dropoff.latitude, order.dropoff.longitude)
             stops.append(Stop(order_id=order.id, kind="pickup", node_id=pickup_snap.node_id))
             stops.append(Stop(order_id=order.id, kind="dropoff", node_id=dropoff_snap.node_id))
+            stop_coordinates[(order.id, "pickup")] = (order.pickup.latitude, order.pickup.longitude)
+            stop_coordinates[(order.id, "dropoff")] = (order.dropoff.latitude, order.dropoff.longitude)
             all_nodes.extend([pickup_snap.node_id, dropoff_snap.node_id])
 
         # Pre-compute distances
@@ -175,22 +198,15 @@ def tours(request: Request, body: TourRequest) -> TourResponse:
                 coordinate=Point(latitude=node.latitude, longitude=node.longitude),
             ))
 
-        # Build legs
-        legs = []
-        current = shipper_snap.node_id
-        for stop in tour.ordered_stops:
-            dist = cost_matrix.get_distance(current, stop.node_id)
-            path = cost_matrix.get_path(current, stop.node_id) or []
-            route_points = [
-                Point(latitude=runtime.nodes[nid].latitude, longitude=runtime.nodes[nid].longitude)
-                for nid in path
-            ]
-            legs.append(LegResponse(
-                kind=f"{stop.order_id}_{stop.kind}",
-                distance_meters=dist or 0.0,
-                route_points=route_points,
-            ))
-            current = stop.node_id
+        legs = build_tour_legs(
+            lookup,
+            shipper_click=shipper_click,
+            shipper_snap_distance_meters=shipper_snap.distance_meters,
+            shipper_node_id=shipper_snap.node_id,
+            ordered_stops=tour.ordered_stops,
+            stop_coordinates=stop_coordinates,
+            cost_matrix=cost_matrix,
+        )
 
         return TourResponse(
             shipper_id=body.shipper.id,
@@ -209,20 +225,25 @@ def fleet(request: Request, body: FleetRequest) -> FleetResponse:
     options = _to_routing_options(body.options)
 
     try:
+        lookup = GraphNodeLookup(runtime.nodes)
         cost_matrix = CostMatrix(runtime, options)
 
-        # Snap all points
         shipper_nodes = {}
+        shipper_snaps: dict[str, tuple] = {}
         for s in body.shippers:
             snap = snap_point(runtime, s.location.latitude, s.location.longitude)
             shipper_nodes[s.id] = snap.node_id
+            shipper_snaps[s.id] = (snap, (s.location.latitude, s.location.longitude))
 
         orders_data = []
+        stop_coordinates: dict[tuple[str, str], tuple[float, float]] = {}
         all_nodes = list(shipper_nodes.values())
         for order in body.orders:
             pickup_snap = snap_point(runtime, order.pickup.latitude, order.pickup.longitude)
             dropoff_snap = snap_point(runtime, order.dropoff.latitude, order.dropoff.longitude)
             orders_data.append((order.id, pickup_snap.node_id, dropoff_snap.node_id))
+            stop_coordinates[(order.id, "pickup")] = (order.pickup.latitude, order.pickup.longitude)
+            stop_coordinates[(order.id, "dropoff")] = (order.dropoff.latitude, order.dropoff.longitude)
             all_nodes.extend([pickup_snap.node_id, dropoff_snap.node_id])
 
         # Pre-compute distances
@@ -248,21 +269,16 @@ def fleet(request: Request, body: FleetRequest) -> FleetResponse:
                     coordinate=Point(latitude=node.latitude, longitude=node.longitude),
                 ))
 
-            legs = []
-            current = shipper_nodes[sid]
-            for stop in tour.ordered_stops:
-                dist = cost_matrix.get_distance(current, stop.node_id)
-                path = cost_matrix.get_path(current, stop.node_id) or []
-                route_points = [
-                    Point(latitude=runtime.nodes[nid].latitude, longitude=runtime.nodes[nid].longitude)
-                    for nid in path
-                ]
-                legs.append(LegResponse(
-                    kind=f"{stop.order_id}_{stop.kind}",
-                    distance_meters=dist or 0.0,
-                    route_points=route_points,
-                ))
-                current = stop.node_id
+            snap, shipper_click = shipper_snaps[sid]
+            legs = build_tour_legs(
+                lookup,
+                shipper_click=shipper_click,
+                shipper_snap_distance_meters=snap.distance_meters,
+                shipper_node_id=shipper_nodes[sid],
+                ordered_stops=tour.ordered_stops,
+                stop_coordinates=stop_coordinates,
+                cost_matrix=cost_matrix,
+            )
 
             tours.append(FleetTourResponse(
                 shipper_id=sid,
@@ -280,38 +296,3 @@ def fleet(request: Request, body: FleetRequest) -> FleetResponse:
         )
     except AcceptedAreaError as exc:
         raise http_exception_for_domain_error(exc) from exc
-
-
-@router.post("/shortest-path", response_model=ShortestPathResponse)
-def shortest_path(
-    request: Request, body: ShortestPathRequest
-) -> ShortestPathResponse:
-    try:
-        return compute_shortest_path_response(
-            _runtime(request), body.start, body.end
-        )
-    except (AcceptedAreaError, NoRouteError) as exc:
-        raise http_exception_for_domain_error(exc) from exc
-
-
-@router.post("/optimize-route", response_model=OptimizeRouteResponse)
-def optimize_route(
-    request: Request, body: OptimizeRouteRequest
-) -> OptimizeRouteResponse:
-    if len(body.points) != 2:
-        raise HTTPException(
-            status_code=422,
-            detail="optimize-route requires exactly two points",
-        )
-    try:
-        result = compute_shortest_path_response(
-            _runtime(request), body.points[0], body.points[1]
-        )
-    except (AcceptedAreaError, NoRouteError) as exc:
-        raise http_exception_for_domain_error(exc) from exc
-    return OptimizeRouteResponse(
-        route_points=result.route_points,
-        distance=result.distance,
-        start_node_id=result.start_node_id,
-        end_node_id=result.end_node_id,
-    )

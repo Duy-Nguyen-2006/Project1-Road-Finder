@@ -51,4 +51,4 @@ app = create_app()
 #
 # After the server runs, frontend can call:
 # GET /health
-# POST /optimize-route
+# POST /route

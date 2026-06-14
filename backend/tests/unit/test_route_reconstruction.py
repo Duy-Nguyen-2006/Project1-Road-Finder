@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from app.application.graph_runtime import build_graph_runtime
+from app.application.node_lookup import GraphNodeLookup
 from app.domain.dijkstra import bidirectional_dijkstra
 from app.domain.route_reconstruction import (
     RouteCoordinate,
@@ -35,7 +36,7 @@ def test_route_points_begin_with_clicked_start_and_end_with_clicked_end(runtime)
         runtime.adjacency, start_snap.node_id, end_snap.node_id
     )
     route = reconstruct_route_points(
-        runtime,
+        GraphNodeLookup(runtime.nodes),
         clicked_start=start,
         clicked_end=end,
         start_snap_distance_meters=start_snap.distance_meters,
@@ -58,7 +59,7 @@ def test_intermediate_points_follow_dijkstra_node_order(runtime):
         runtime.adjacency, start_snap.node_id, end_snap.node_id
     )
     route = reconstruct_route_points(
-        runtime,
+        GraphNodeLookup(runtime.nodes),
         clicked_start=start,
         clicked_end=end,
         start_snap_distance_meters=start_snap.distance_meters,
@@ -85,7 +86,7 @@ def test_exact_endpoint_on_node_dedupes_adjacent_duplicate(runtime):
         runtime.adjacency, start_snap.node_id, end_snap.node_id
     )
     route = reconstruct_route_points(
-        runtime,
+        GraphNodeLookup(runtime.nodes),
         clicked_start=start,
         clicked_end=end,
         start_snap_distance_meters=start_snap.distance_meters,
@@ -107,7 +108,7 @@ def test_non_identical_snap_segment_preserved_when_offset_from_node(runtime):
         runtime.adjacency, start_snap.node_id, end_snap.node_id
     )
     route = reconstruct_route_points(
-        runtime,
+        GraphNodeLookup(runtime.nodes),
         clicked_start=start,
         clicked_end=end,
         start_snap_distance_meters=start_snap.distance_meters,
@@ -153,7 +154,7 @@ def test_same_snapped_node_returns_snap_only_route(runtime):
     assert dijkstra.node_ids == ["node-mid"]
     assert dijkstra.graph_distance_meters == pytest.approx(0.0)
     route = reconstruct_route_points(
-        runtime,
+        GraphNodeLookup(runtime.nodes),
         clicked_start=start,
         clicked_end=end,
         start_snap_distance_meters=start_snap.distance_meters,
@@ -173,7 +174,7 @@ def test_same_snapped_node_returns_snap_only_route(runtime):
     )
     for _ in range(10):
         again = reconstruct_route_points(
-            runtime,
+            GraphNodeLookup(runtime.nodes),
             clicked_start=start,
             clicked_end=end,
             start_snap_distance_meters=start_snap.distance_meters,

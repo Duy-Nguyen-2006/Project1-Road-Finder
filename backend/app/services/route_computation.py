@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.application.graph_runtime import GraphRuntime
+from app.application.node_lookup import GraphNodeLookup
 from app.domain.cost_model import RoutingOptions
 from app.domain.route_reconstruction import reconstruct_route
 from app.models.point import Point
@@ -20,8 +21,9 @@ def compute_shortest_path_response(
         (end.latitude, end.longitude),
         options,
     )
+    lookup = GraphNodeLookup(runtime.nodes)
     reconstructed = reconstruct_route(
-        runtime,
+        lookup,
         clicked_start=(start.latitude, start.longitude),
         clicked_end=(end.latitude, end.longitude),
         start_snap_distance_meters=graph_result.start_snap_distance_meters,

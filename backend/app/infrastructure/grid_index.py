@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from typing import Iterable
 
-from app.infrastructure.graph_loader import GraphBBox, GraphNode
+from app.domain.graph_types import GraphBBox, GraphNode
 from app.utils.distance import haversine_meters
 
 GRID_ROWS = 16

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from itertools import permutations
 
-from app.application.cost_matrix import CostMatrix
+from app.domain.protocols import DistanceProvider
 
 
 @dataclass(frozen=True)
@@ -31,7 +31,7 @@ def _check_precedence(stops: list[Stop]) -> bool:
     return True
 
 
-def _tour_distance(stops: list[Stop], cost_matrix: CostMatrix) -> float:
+def _tour_distance(stops: list[Stop], cost_matrix: DistanceProvider) -> float:
     """Compute total distance for a sequence of stops."""
     if len(stops) < 2:
         return 0.0
@@ -47,7 +47,7 @@ def _tour_distance(stops: list[Stop], cost_matrix: CostMatrix) -> float:
 
 def _brute_force_optimal(
     stops: list[Stop],
-    cost_matrix: CostMatrix,
+    cost_matrix: DistanceProvider,
 ) -> tuple[list[Stop], float] | None:
     """Find optimal tour by trying all valid permutations.
 
@@ -72,7 +72,7 @@ def _brute_force_optimal(
 
 def _nearest_neighbor_heuristic(
     stops: list[Stop],
-    cost_matrix: CostMatrix,
+    cost_matrix: DistanceProvider,
     start_node: str | None = None,
 ) -> list[Stop] | None:
     """Nearest-neighbor heuristic respecting precedence constraints.
@@ -131,7 +131,7 @@ def _nearest_neighbor_heuristic(
 
 def _two_opt_improve(
     stops: list[Stop],
-    cost_matrix: CostMatrix,
+    cost_matrix: DistanceProvider,
     max_iterations: int = 100,
 ) -> list[Stop]:
     """2-opt local search improvement respecting precedence."""
@@ -170,8 +170,8 @@ def _two_opt_improve(
 def optimize_tour(
     shipper_node: str,
     stops: list[Stop],
-    cost_matrix: CostMatrix,
-    n_small_threshold: int = 10,
+    cost_matrix: DistanceProvider,
+    n_small_threshold: int = 8,
 ) -> Tour:
     """Optimize a tour for a single shipper visiting multiple stops.
 
@@ -234,7 +234,7 @@ def optimize_tour(
 def _brute_force_with_start(
     stops: list[Stop],
     start_node: str,
-    cost_matrix: CostMatrix,
+    cost_matrix: DistanceProvider,
 ) -> tuple[list[Stop], float] | None:
     """Brute-force with fixed start node."""
     best_stops = None

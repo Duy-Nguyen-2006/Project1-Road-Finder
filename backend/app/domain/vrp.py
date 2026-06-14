@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from itertools import permutations
+from dataclasses import dataclass
+from itertools import permutations, product
 
-from app.application.cost_matrix import CostMatrix
+from app.domain.protocols import DistanceProvider
 from app.domain.tsp import Stop, Tour, _check_precedence, optimize_tour
 
 
@@ -15,10 +15,23 @@ class FleetPlan:
     optimal: bool
 
 
+def _insert_pickup_dropoff(
+    stops: list[Stop],
+    pickup_pos: int,
+    dropoff_pos: int,
+    pickup_stop: Stop,
+    dropoff_stop: Stop,
+) -> list[Stop]:
+    candidate = list(stops)
+    candidate.insert(pickup_pos, pickup_stop)
+    candidate.insert(dropoff_pos + 1, dropoff_stop)
+    return candidate
+
+
 def _compute_tour_distance(
     shipper_node: str,
     stops: list[Stop],
-    cost_matrix: CostMatrix,
+    cost_matrix: DistanceProvider,
 ) -> float:
     if not stops:
         return 0.0
@@ -37,7 +50,7 @@ def _cheapest_insertion(
     shipper_ids: list[str],
     shipper_nodes: dict[str, str],
     orders: list[tuple[str, str, str]],  # (order_id, pickup_node, dropoff_node)
-    cost_matrix: CostMatrix,
+    cost_matrix: DistanceProvider,
 ) -> dict[str, list[Stop]]:
     """Assign orders to shippers using cheapest insertion heuristic.
 
@@ -56,28 +69,26 @@ def _cheapest_insertion(
         for sid in shipper_ids:
             snode = shipper_nodes[sid]
             current_stops = tours[sid]
+            old_cost = _compute_tour_distance(snode, current_stops, cost_matrix)
 
             # Try all valid insertion positions for pickup and dropoff
             # Constraint: pickup must come before dropoff
+            pickup_stop = Stop(order_id=order_id, kind="pickup", node_id=pickup_node)
+            dropoff_stop = Stop(order_id=order_id, kind="dropoff", node_id=dropoff_node)
+
             for pickup_pos in range(len(current_stops) + 1):
-                for dropoff_pos in range(pickup_pos + 1, len(current_stops) + 2):
-                    # Build candidate tour
-                    pickup_stop = Stop(order_id=order_id, kind="pickup", node_id=pickup_node)
-                    dropoff_stop = Stop(order_id=order_id, kind="dropoff", node_id=dropoff_node)
-
-                    candidate = (
-                        current_stops[:pickup_pos]
-                        + [pickup_stop]
-                        + current_stops[pickup_pos:dropoff_pos - 1]
-                        + [dropoff_stop]
-                        + current_stops[dropoff_pos - 1:]
+                for dropoff_pos in range(pickup_pos, len(current_stops) + 1):
+                    candidate = _insert_pickup_dropoff(
+                        current_stops,
+                        pickup_pos,
+                        dropoff_pos,
+                        pickup_stop,
+                        dropoff_stop,
                     )
-
                     if not _check_precedence(candidate):
                         continue
 
                     new_cost = _compute_tour_distance(snode, candidate, cost_matrix)
-                    old_cost = _compute_tour_distance(snode, current_stops, cost_matrix)
                     increase = new_cost - old_cost
 
                     if increase < best_cost_increase:
@@ -85,32 +96,16 @@ def _cheapest_insertion(
                         best_shipper = sid
                         best_position = (pickup_pos, dropoff_pos)
 
-            # Also try appending at end
-            pickup_stop = Stop(order_id=order_id, kind="pickup", node_id=pickup_node)
-            dropoff_stop = Stop(order_id=order_id, kind="dropoff", node_id=dropoff_node)
-            candidate = current_stops + [pickup_stop, dropoff_stop]
-
-            if _check_precedence(candidate):
-                new_cost = _compute_tour_distance(snode, candidate, cost_matrix)
-                old_cost = _compute_tour_distance(snode, current_stops, cost_matrix)
-                increase = new_cost - old_cost
-
-                if increase < best_cost_increase:
-                    best_cost_increase = increase
-                    best_shipper = sid
-                    best_position = (len(current_stops), len(current_stops) + 1)
-
         if best_shipper is not None:
             pickup_stop = Stop(order_id=order_id, kind="pickup", node_id=pickup_node)
             dropoff_stop = Stop(order_id=order_id, kind="dropoff", node_id=dropoff_node)
             p_pos, d_pos = best_position
-            current = tours[best_shipper]
-            tours[best_shipper] = (
-                current[:p_pos]
-                + [pickup_stop]
-                + current[p_pos:d_pos - 1]
-                + [dropoff_stop]
-                + current[d_pos - 1:]
+            tours[best_shipper] = _insert_pickup_dropoff(
+                tours[best_shipper],
+                p_pos,
+                d_pos,
+                pickup_stop,
+                dropoff_stop,
             )
 
     return tours
@@ -118,7 +113,7 @@ def _cheapest_insertion(
 
 def _intra_route_2opt(
     stops: list[Stop],
-    cost_matrix: CostMatrix,
+    cost_matrix: DistanceProvider,
     shipper_node: str,
 ) -> list[Stop]:
     """2-opt improvement within a single route."""
@@ -150,7 +145,7 @@ def _intra_route_2opt(
 def _inter_route_relocate(
     tours: dict[str, list[Stop]],
     shipper_nodes: dict[str, str],
-    cost_matrix: CostMatrix,
+    cost_matrix: DistanceProvider,
 ) -> dict[str, list[Stop]]:
     """Try relocating an order from one shipper to another."""
     improved = True
@@ -238,8 +233,9 @@ def solve_vrp(
     shipper_ids: list[str],
     shipper_nodes: dict[str, str],
     orders: list[tuple[str, str, str]],  # (order_id, pickup_node, dropoff_node)
-    cost_matrix: CostMatrix,
-    brute_force_threshold: int = 4,
+    cost_matrix: DistanceProvider,
+    brute_force_threshold: int = 3,
+    max_brute_force_stops_per_tour: int = 6,
 ) -> FleetPlan:
     """Solve the VRP: assign orders to shippers and optimize tours.
 
@@ -256,8 +252,14 @@ def solve_vrp(
         )
 
     # Check if small enough for brute-force
-    if len(orders) <= brute_force_threshold and len(shipper_ids) <= 3:
-        result = _brute_force_vrp(shipper_ids, shipper_nodes, orders, cost_matrix)
+    if len(orders) <= brute_force_threshold and len(shipper_ids) <= 2:
+        result = _brute_force_vrp(
+            shipper_ids,
+            shipper_nodes,
+            orders,
+            cost_matrix,
+            max_stops_per_tour=max_brute_force_stops_per_tour,
+        )
         if result:
             return result
 
@@ -277,10 +279,20 @@ def solve_vrp(
     fleet_tours = []
     total_distance = 0.0
     assigned_orders = set()
+    unassigned_from_inf: set[str] = set()
 
     for sid in shipper_ids:
         stops = tours_dict[sid]
         dist = _compute_tour_distance(shipper_nodes[sid], stops, cost_matrix)
+        if dist == float("inf"):
+            for stop in stops:
+                unassigned_from_inf.add(stop.order_id)
+            fleet_tours.append((sid, Tour(
+                ordered_stops=[],
+                total_distance_meters=0.0,
+                optimal=False,
+            )))
+            continue
         fleet_tours.append((sid, Tour(
             ordered_stops=stops,
             total_distance_meters=dist,
@@ -290,7 +302,12 @@ def solve_vrp(
         for stop in stops:
             assigned_orders.add(stop.order_id)
 
-    unassigned = [oid for oid, _, _ in orders if oid not in assigned_orders]
+    unassigned = [
+        oid
+        for oid, _, _ in orders
+        if oid not in assigned_orders or oid in unassigned_from_inf
+    ]
+    unassigned = list(dict.fromkeys(unassigned))
 
     return FleetPlan(
         tours=fleet_tours,
@@ -304,7 +321,8 @@ def _brute_force_vrp(
     shipper_ids: list[str],
     shipper_nodes: dict[str, str],
     orders: list[tuple[str, str, str]],
-    cost_matrix: CostMatrix,
+    cost_matrix: DistanceProvider,
+    max_stops_per_tour: int = 6,
 ) -> FleetPlan | None:
     """Brute-force VRP for small instances.
 
@@ -319,8 +337,6 @@ def _brute_force_vrp(
     best_plan = None
     best_total = float("inf")
 
-    # For small n, enumerate all assignments
-    from itertools import product
     for assignment in product(shipper_ids, repeat=len(order_ids)):
         # Build tours for this assignment
         tours_dict: dict[str, list[Stop]] = {sid: [] for sid in shipper_ids}
@@ -339,7 +355,13 @@ def _brute_force_vrp(
         if not valid:
             continue
 
-        # Optimize each tour (brute-force since small)
+        for sid in shipper_ids:
+            if len(tours_dict[sid]) > max_stops_per_tour:
+                valid = False
+                break
+        if not valid:
+            continue
+
         total = 0.0
         fleet_tours = []
         all_optimal = True

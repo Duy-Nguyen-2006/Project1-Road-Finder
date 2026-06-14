@@ -6,7 +6,8 @@ from app.application.graph_runtime import GraphRuntime, _options_hash
 from app.domain.cost_model import RoutingOptions
 from app.domain.dijkstra import bidirectional_dijkstra
 from app.domain.errors import NoRouteError
-from app.domain.snapper import snap_point
+from app.application.snap_service import snap_point
+from app.infrastructure.route_cache import CachedGraphPath
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,7 @@ class CostMatrix:
     def compute_for_nodes(self, node_ids: list[str]) -> None:
         """Pre-compute distances between all pairs of given nodes."""
         adjacency = self._runtime.adjacency_for(self._options)
+        reverse_adjacency = self._runtime.reverse_adjacency_for(self._options)
         version = self._runtime.metadata.graph_version
         cache = self._runtime.route_cache
 
@@ -68,7 +70,14 @@ class CostMatrix:
                     continue
 
                 try:
-                    result = bidirectional_dijkstra(adjacency, src, dst)
+                    result = bidirectional_dijkstra(
+                        adjacency, src, dst, reverse_adjacency=reverse_adjacency
+                    )
+                    path = CachedGraphPath(
+                        node_ids=list(result.node_ids),
+                        graph_distance_meters=result.graph_distance_meters,
+                    )
+                    cache.put(version, self._opts_hash, src, dst, path)
                     entry = CostMatrixEntry(
                         distance_meters=result.graph_distance_meters,
                         path_node_ids=list(result.node_ids),

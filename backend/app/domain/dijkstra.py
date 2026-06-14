@@ -4,7 +4,7 @@ import heapq
 from dataclasses import dataclass
 
 from app.domain.errors import NoRouteError
-from app.domain.graph import Adjacency
+from app.domain.graph import Adjacency, build_reverse_adjacency
 
 _INF = float("inf")
 
@@ -19,12 +19,16 @@ def bidirectional_dijkstra(
     adjacency: Adjacency,
     start_node_id: str,
     end_node_id: str,
+    reverse_adjacency: Adjacency | None = None,
 ) -> DijkstraResult:
     if start_node_id not in adjacency or end_node_id not in adjacency:
         raise NoRouteError()
 
     if start_node_id == end_node_id:
         return DijkstraResult(node_ids=[start_node_id], graph_distance_meters=0.0)
+
+    if reverse_adjacency is None:
+        reverse_adjacency = build_reverse_adjacency(adjacency)
 
     dist_f: dict[str, float] = {start_node_id: 0.0}
     dist_b: dict[str, float] = {end_node_id: 0.0}
@@ -57,7 +61,7 @@ def bidirectional_dijkstra(
             dist_u, u = heapq.heappop(heap_b)
             if dist_u > dist_b.get(u, _INF):
                 continue
-            for v, weight in adjacency.get(u, []):
+            for v, weight in reverse_adjacency.get(u, []):
                 nd = dist_u + weight
                 _relax(dist_b, parent_b, heap_b, u, v, nd)
                 total = dist_f.get(v, _INF) + dist_b.get(v, _INF)

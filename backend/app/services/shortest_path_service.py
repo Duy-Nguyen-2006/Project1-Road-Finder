@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from app.application.graph_runtime import GraphRuntime, _options_hash
 from app.domain.cost_model import RoutingOptions
 from app.domain.dijkstra import bidirectional_dijkstra
-from app.domain.snapper import snap_point
+from app.application.snap_service import snap_point
 from app.infrastructure.route_cache import CachedGraphPath
 
 
@@ -47,8 +47,12 @@ def find_cached_or_compute_graph_path(
         )
 
     adjacency = runtime.adjacency_for(options)
+    reverse_adjacency = runtime.reverse_adjacency_for(options)
     dijkstra = bidirectional_dijkstra(
-        adjacency, start_snap.node_id, end_snap.node_id
+        adjacency,
+        start_snap.node_id,
+        end_snap.node_id,
+        reverse_adjacency=reverse_adjacency,
     )
     path = CachedGraphPath(
         node_ids=list(dijkstra.node_ids),

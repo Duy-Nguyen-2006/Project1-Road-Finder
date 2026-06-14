@@ -8,11 +8,6 @@ class RoutingOptionsRequest(BaseModel):
     avoid_edge_ids: list[str] = Field(default_factory=list)
 
 
-class ShortestPathRequest(BaseModel):
-    start: Point
-    end: Point
-
-
 class ShortestPathResponse(BaseModel):
     route_points: list[Point]
     distance: float = Field(ge=0)
@@ -24,17 +19,6 @@ class GraphBoundsResponse(BaseModel):
     bbox: dict[str, float]
     max_snap_distance_meters: float
     graph_version: str
-
-
-class OptimizeRouteRequest(BaseModel):
-    points: list[Point]
-
-
-class OptimizeRouteResponse(BaseModel):
-    route_points: list[Point]
-    distance: float = Field(ge=0)
-    start_node_id: str
-    end_node_id: str
 
 
 class RouteRequest(BaseModel):

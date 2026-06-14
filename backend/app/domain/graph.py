@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.domain.cost_model import RoutingOptions, edge_cost
-from app.infrastructure.graph_loader import ValidatedGraph
+from app.domain.graph_types import ValidatedGraph
 
 Adjacency = dict[str, list[tuple[str, float]]]
 
@@ -33,9 +33,15 @@ def build_directed_adjacency(
     return adjacency
 
 
-def build_bidirectional_adjacency(graph: ValidatedGraph) -> Adjacency:
-    """Legacy: treats each edge as undirected (backward-compatible)."""
-    return build_directed_adjacency(graph, RoutingOptions())
+def build_reverse_adjacency(adjacency: Adjacency) -> Adjacency:
+    """Reverse graph for backward Dijkstra on directed graphs (incoming edges)."""
+    reverse: Adjacency = {node_id: [] for node_id in adjacency}
+    for from_node, neighbors in adjacency.items():
+        for to_node, weight in neighbors:
+            _add_neighbor(reverse, to_node, from_node, weight)
+    for node_id in reverse:
+        reverse[node_id].sort(key=lambda item: item[0])
+    return reverse
 
 
 def _add_neighbor(

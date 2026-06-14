@@ -4,15 +4,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.domain.cost_model import RoutingOptions
-from app.domain.graph import Adjacency, build_directed_adjacency
-from app.infrastructure.graph_loader import (
-    DEFAULT_GRAPH_PATH,
-    GraphMetadata,
-    GraphNode,
-    GraphEdge,
-    ValidatedGraph,
-    load_graph_data,
-)
+from app.domain.graph import Adjacency, build_directed_adjacency, build_reverse_adjacency
+from app.domain.graph_types import GraphEdge, GraphMetadata, GraphNode, ValidatedGraph
+from app.infrastructure.graph_loader import DEFAULT_GRAPH_PATH, load_graph_data
 from app.infrastructure.grid_index import GridSpatialIndex
 from app.infrastructure.route_cache import RouteCache
 
@@ -30,17 +24,28 @@ class GraphRuntime:
     grid_index: GridSpatialIndex
     route_cache: RouteCache
     _adjacency_cache: dict[str, Adjacency] = field(default_factory=dict)
+    _reverse_adjacency_cache: dict[str, Adjacency] = field(default_factory=dict)
 
     def adjacency_for(self, options: RoutingOptions | None = None) -> Adjacency:
         if options is None:
             options = RoutingOptions()
         key = _options_hash(options)
         if key not in self._adjacency_cache:
-            self._adjacency_cache[key] = build_directed_adjacency(
-                ValidatedGraph(metadata=self.metadata, nodes=self.nodes, edges=self.edges),
-                options,
+            validated = ValidatedGraph(
+                metadata=self.metadata, nodes=self.nodes, edges=self.edges
             )
+            forward = build_directed_adjacency(validated, options)
+            self._adjacency_cache[key] = forward
+            self._reverse_adjacency_cache[key] = build_reverse_adjacency(forward)
         return self._adjacency_cache[key]
+
+    def reverse_adjacency_for(self, options: RoutingOptions | None = None) -> Adjacency:
+        if options is None:
+            options = RoutingOptions()
+        key = _options_hash(options)
+        if key not in self._adjacency_cache:
+            self.adjacency_for(options)
+        return self._reverse_adjacency_cache[key]
 
     @property
     def adjacency(self) -> Adjacency:
