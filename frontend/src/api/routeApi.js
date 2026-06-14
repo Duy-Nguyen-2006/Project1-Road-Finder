@@ -21,8 +21,20 @@ async function parseError(response) {
   return message;
 }
 
+async function postJson(url, data) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return response.json();
+}
+
 export async function getGraphBounds() {
-  const response = await fetch(`${API_BASE_URL}/graph-bounds`);
+  const response = await fetch(`${API_BASE_URL}/graph/bounds`);
   if (!response.ok) {
     throw new Error(
       (await parseError(response)) || "Không tải được vùng hỗ trợ từ backend"
@@ -32,15 +44,23 @@ export async function getGraphBounds() {
 }
 
 export async function findShortestPath({ start, end }) {
-  const response = await fetch(`${API_BASE_URL}/shortest-path`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ start, end }),
-  });
-  if (!response.ok) {
-    throw new Error(await parseError(response));
-  }
-  return response.json();
+  return postJson(`${API_BASE_URL}/route`, { start, end });
+}
+
+export async function postRoute({ start, end, options }) {
+  return postJson(`${API_BASE_URL}/route`, { start, end, options });
+}
+
+export async function postAssignments({ order, shippers, options }) {
+  return postJson(`${API_BASE_URL}/assignments`, { order, shippers, options });
+}
+
+export async function postTours({ shipper, orders, options }) {
+  return postJson(`${API_BASE_URL}/tours`, { shipper, orders, options });
+}
+
+export async function postFleet({ shippers, orders, options }) {
+  return postJson(`${API_BASE_URL}/fleet`, { shippers, orders, options });
 }
 
 export async function checkHealth() {

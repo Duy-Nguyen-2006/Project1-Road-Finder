@@ -1,0 +1,46 @@
+import React from "react";
+import { PLACEMENT_MODE, ORDER_STEP } from "../hooks/useVrpState";
+
+const MODE_LABELS = {
+  [PLACEMENT_MODE.ORDER]: "Đơn hàng",
+  [PLACEMENT_MODE.SHIPPER]: "Shipper",
+};
+
+const STEP_LABELS = {
+  [ORDER_STEP.PICKUP]: "Chọn điểm lấy hàng",
+  [ORDER_STEP.DROPOFF]: "Chọn điểm giao hàng",
+};
+
+export default function ModeSwitcher({
+  placementMode,
+  onPlacementModeChange,
+  orderStep,
+}) {
+  return (
+    <div className="panel-card">
+      <h2>Chế độ đặt điểm</h2>
+      <div className="mode-switcher">
+        {Object.values(PLACEMENT_MODE).map((mode) => (
+          <button
+            key={mode}
+            className={placementMode === mode ? "active" : ""}
+            onClick={() => onPlacementModeChange(mode)}
+            type="button"
+          >
+            {MODE_LABELS[mode]}
+          </button>
+        ))}
+      </div>
+      {placementMode === PLACEMENT_MODE.ORDER && (
+        <p className="helper-text">
+          {STEP_LABELS[orderStep]}
+        </p>
+      )}
+      {placementMode === PLACEMENT_MODE.SHIPPER && (
+        <p className="helper-text">
+          Click lên bản đồ để đặt vị trí shipper.
+        </p>
+      )}
+    </div>
+  );
+}

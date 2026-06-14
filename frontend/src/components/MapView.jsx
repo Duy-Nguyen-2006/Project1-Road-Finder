@@ -10,7 +10,8 @@ import {
   useMapEvents,
 } from "react-leaflet";
 import L from "leaflet";
-import { bboxToLeaflet, routePointsToLeaflet } from "../utils/geo";
+import { bboxToLeaflet } from "../utils/geo";
+import { PLACEMENT_MODE } from "../hooks/useVrpState";
 
 // Fix Leaflet default icon issue with Vite/Webpack
 delete L.Icon.Default.prototype._getIconUrl;
@@ -22,6 +23,28 @@ L.Icon.Default.mergeOptions({
   shadowUrl:
     "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
 });
+
+// Custom marker icons
+function createIcon(color) {
+  return L.divIcon({
+    className: "custom-marker",
+    html: `<div style="
+      width: 16px;
+      height: 16px;
+      background: ${color};
+      border: 2px solid white;
+      border-radius: 50%;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+    "></div>`,
+    iconSize: [16, 16],
+    iconAnchor: [8, 8],
+  });
+}
+
+const PICKUP_ICON = createIcon("#16a34a");
+const DROPOFF_ICON = createIcon("#dc2626");
+const SHIPPER_ICON = createIcon("#2563eb");
+const PENDING_ICON = createIcon("#f59e0b");
 
 const DEFAULT_CENTER = [10.7769, 106.7009];
 const DEFAULT_ZOOM = 13;
@@ -36,7 +59,7 @@ function MapClickHandler({ enabled, onAddPoint }) {
   return null;
 }
 
-function MapBoundsFitter({ bounds, routePoints }) {
+function MapBoundsFitter({ bounds, tourPolylines }) {
   const map = useMap();
   useEffect(() => {
     if (bounds) {
@@ -48,10 +71,11 @@ function MapBoundsFitter({ bounds, routePoints }) {
   }, [bounds, map]);
 
   useEffect(() => {
-    if (Array.isArray(routePoints) && routePoints.length > 1) {
-      map.fitBounds(routePoints, { padding: [32, 32] });
+    const allPoints = tourPolylines.flatMap((tour) => tour.points);
+    if (allPoints.length > 1) {
+      map.fitBounds(allPoints, { padding: [32, 32] });
     }
-  }, [routePoints, map]);
+  }, [tourPolylines, map]);
 
   return null;
 }
@@ -67,17 +91,34 @@ function MapInvalidator() {
 
 export default function MapView({
   bounds,
-  startPoint,
-  endPoint,
-  routePoints,
+  orders,
+  shippers,
+  pendingPickup,
+  fleetResult,
+  shipperColorMap,
   selectionEnabled,
   onAddPoint,
+  placementMode,
 }) {
   const rectangleBounds = useMemo(() => bboxToLeaflet(bounds), [bounds]);
-  const polylinePositions = useMemo(
-    () => routePointsToLeaflet(routePoints),
-    [routePoints]
-  );
+
+  // Build polylines from fleet result
+  const tourPolylines = useMemo(() => {
+    if (!fleetResult || !fleetResult.tours) return [];
+    return fleetResult.tours.map((tour) => {
+      const points = [];
+      for (const leg of tour.legs) {
+        for (const p of leg.route_points) {
+          points.push([p.latitude, p.longitude]);
+        }
+      }
+      return {
+        shipperId: tour.shipper_id,
+        points,
+        color: shipperColorMap[tour.shipper_id] || "#666",
+      };
+    });
+  }, [fleetResult, shipperColorMap]);
 
   return (
     <MapContainer
@@ -92,7 +133,7 @@ export default function MapView({
       />
       <MapInvalidator />
       <MapClickHandler enabled={selectionEnabled} onAddPoint={onAddPoint} />
-      <MapBoundsFitter bounds={bounds} routePoints={polylinePositions} />
+      <MapBoundsFitter bounds={bounds} tourPolylines={tourPolylines} />
 
       {rectangleBounds ? (
         <Rectangle
@@ -101,30 +142,61 @@ export default function MapView({
         />
       ) : null}
 
-      {startPoint ? (
+      {/* Shipper markers */}
+      {shippers.map((s) => (
         <Marker
-          key={`start-${startPoint.latitude}-${startPoint.longitude}`}
-          position={[startPoint.latitude, startPoint.longitude]}
+          key={`shipper-${s.id}`}
+          position={[s.location.latitude, s.location.longitude]}
+          icon={SHIPPER_ICON}
         >
-          <Popup>Start</Popup>
+          <Popup>
+            <strong>{s.id}</strong> (Shipper)
+          </Popup>
         </Marker>
-      ) : null}
+      ))}
 
-      {endPoint ? (
+      {/* Order markers */}
+      {orders.map((o) => (
+        <React.Fragment key={o.id}>
+          <Marker
+            position={[o.pickup.latitude, o.pickup.longitude]}
+            icon={PICKUP_ICON}
+          >
+            <Popup>
+              <strong>{o.id}</strong> - Lấy hàng
+            </Popup>
+          </Marker>
+          <Marker
+            position={[o.dropoff.latitude, o.dropoff.longitude]}
+            icon={DROPOFF_ICON}
+          >
+            <Popup>
+              <strong>{o.id}</strong> - Giao hàng
+            </Popup>
+          </Marker>
+        </React.Fragment>
+      ))}
+
+      {/* Pending pickup marker */}
+      {pendingPickup && (
         <Marker
-          key={`end-${endPoint.latitude}-${endPoint.longitude}`}
-          position={[endPoint.latitude, endPoint.longitude]}
+          position={[pendingPickup.latitude, pendingPickup.longitude]}
+          icon={PENDING_ICON}
         >
-          <Popup>End</Popup>
+          <Popup>Điểm lấy hàng (chờ chọn điểm giao)</Popup>
         </Marker>
-      ) : null}
+      )}
 
-      {polylinePositions.length > 1 ? (
-        <Polyline
-          positions={polylinePositions}
-          pathOptions={{ color: "#2563eb", weight: 5 }}
-        />
-      ) : null}
+      {/* Tour polylines */}
+      {tourPolylines.map((tp) =>
+        tp.points.length > 1 ? (
+          <Polyline
+            key={`tour-${tp.shipperId}`}
+            positions={tp.points}
+            pathOptions={{ color: tp.color, weight: 4, opacity: 0.8 }}
+          />
+        ) : null
+      )}
     </MapContainer>
   );
 }

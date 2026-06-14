@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app.domain.graph import build_bidirectional_adjacency
+from app.domain.graph import build_directed_adjacency
 from app.infrastructure.graph_loader import GraphValidationError, load_graph_data
 from app.infrastructure.grid_index import GridSpatialIndex
 from app.utils.distance import haversine_meters
@@ -34,21 +34,26 @@ def test_build_runtime_from_fixture_graph():
     from app.application.graph_runtime import build_graph_runtime
 
     runtime = build_graph_runtime(FIXTURE_GRAPH_PATH)
-    assert runtime.metadata.graph_version == "hcm-fixture-v1"
-    assert len(runtime.nodes) == 4
+    assert runtime.metadata.graph_version == "hcm-fixture-v2"
+    assert len(runtime.nodes) == 6
     assert len(runtime.metadata.graph_version) > 0
     assert runtime.route_cache.limit == 1000
     assert runtime.route_cache.size == 0
 
 
-def test_adjacency_treats_edges_as_bidirectional():
+def test_adjacency_respects_directed_edges_and_cost_multipliers():
     graph = load_graph_data(FIXTURE_GRAPH_PATH)
-    adj = build_bidirectional_adjacency(graph)
+    adj = build_directed_adjacency(graph)
 
-    assert ("node-mid", 120.5) in adj["node-start"]
-    assert ("node-start", 120.5) in adj["node-mid"]
+    # node-start -> node-mid: distance=120.5, road_type=residential, multiplier=1.2 -> 144.6
+    assert ("node-mid", 144.6) in adj["node-start"]
+    assert ("node-start", 144.6) in adj["node-mid"]
+    # node-mid -> node-end: distance=180.0, road_type=secondary, multiplier=1.0 -> 180.0
     assert ("node-end", 180.0) in adj["node-mid"]
     assert ("node-mid", 180.0) in adj["node-end"]
+    # node-start -> node-north is oneway (no reverse)
+    assert any(nid == "node-north" for nid, _ in adj["node-start"])
+    assert not any(nid == "node-start" for nid, _ in adj.get("node-north", []))
 
 
 def test_grid_index_matches_brute_force_on_fixture_points():
@@ -106,7 +111,7 @@ def test_app_startup_loads_graph_when_valid(monkeypatch):
 
     with TestClient(create_app()) as client:
         assert client.app.state.graph_runtime is not None
-        assert client.app.state.graph_runtime.metadata.graph_version == "hcm-fixture-v1"
+        assert client.app.state.graph_runtime.metadata.graph_version == "hcm-fixture-v2"
 
 
 def test_graph_loads_during_lifespan_not_lazy_on_first_request(monkeypatch):

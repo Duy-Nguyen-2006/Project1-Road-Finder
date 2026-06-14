@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.application.graph_runtime import GraphRuntime
+from app.domain.cost_model import RoutingOptions
 from app.domain.route_reconstruction import reconstruct_route
 from app.models.point import Point
 from app.models.route_models import ShortestPathResponse
@@ -11,11 +12,13 @@ def compute_shortest_path_response(
     runtime: GraphRuntime,
     start: Point,
     end: Point,
+    options: RoutingOptions | None = None,
 ) -> ShortestPathResponse:
     graph_result = find_cached_or_compute_graph_path(
         runtime,
         (start.latitude, start.longitude),
         (end.latitude, end.longitude),
+        options,
     )
     reconstructed = reconstruct_route(
         runtime,

@@ -22,10 +22,10 @@ def _write_graph(tmp_path: Path, payload: dict) -> Path:
 
 def test_loads_spec_shaped_fixture_graph():
     graph = load_graph_data(FIXTURE_GRAPH_PATH)
-    assert graph.metadata.graph_version == "hcm-fixture-v1"
+    assert graph.metadata.graph_version == "hcm-fixture-v2"
     assert graph.metadata.max_snap_distance_meters == 200
-    assert len(graph.nodes) == 4
-    assert len(graph.edges) == 2
+    assert len(graph.nodes) == 6
+    assert len(graph.edges) == 5
 
 
 def test_rejects_missing_metadata(tmp_path):

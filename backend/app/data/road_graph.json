@@ -1,6 +1,6 @@
 {
   "metadata": {
-    "graph_version": "hcm-fixture-v1",
+    "graph_version": "hcm-fixture-v2",
     "bbox": {
       "min_latitude": 10.7,
       "min_longitude": 106.6,
@@ -25,18 +25,51 @@
     "node-island": {
       "latitude": 10.75,
       "longitude": 106.65
+    },
+    "node-north": {
+      "latitude": 10.785,
+      "longitude": 106.710
+    },
+    "node-south": {
+      "latitude": 10.775,
+      "longitude": 106.720
     }
   },
   "edges": [
     {
       "from": "node-start",
       "to": "node-mid",
-      "distance": 120.5
+      "distance": 120.5,
+      "oneway": false,
+      "road_type": "residential"
     },
     {
       "from": "node-mid",
       "to": "node-end",
-      "distance": 180.0
+      "distance": 180.0,
+      "oneway": false,
+      "road_type": "secondary"
+    },
+    {
+      "from": "node-start",
+      "to": "node-north",
+      "distance": 300.0,
+      "oneway": true,
+      "road_type": "highway"
+    },
+    {
+      "from": "node-north",
+      "to": "node-end",
+      "distance": 250.0,
+      "oneway": false,
+      "road_type": "primary"
+    },
+    {
+      "from": "node-end",
+      "to": "node-south",
+      "distance": 150.0,
+      "oneway": true,
+      "road_type": "tertiary"
     }
   ]
 }

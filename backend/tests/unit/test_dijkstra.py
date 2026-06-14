@@ -41,8 +41,11 @@ def test_shortest_path_on_fixture_graph(runtime):
     result = bidirectional_dijkstra(
         runtime.adjacency, "node-start", "node-end"
     )
+    # node-start -> node-mid: 120.5 * 1.2 (residential) = 144.6
+    # node-mid -> node-end: 180.0 * 1.0 (secondary) = 180.0
+    # total = 324.6
     assert result.node_ids == ["node-start", "node-mid", "node-end"]
-    assert result.graph_distance_meters == pytest.approx(300.5)
+    assert result.graph_distance_meters == pytest.approx(324.6)
 
 
 def test_same_start_and_end_node_returns_zero_distance(runtime):

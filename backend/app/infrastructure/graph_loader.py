@@ -45,6 +45,8 @@ class GraphEdge:
     from_node: str
     to_node: str
     distance: float
+    oneway: bool = False
+    road_type: str = "default"
 
 
 @dataclass(frozen=True)
@@ -179,6 +181,8 @@ def _validate_edges(edges: Any, nodes: dict[str, GraphNode]) -> list[GraphEdge]:
                 from_node=from_node,
                 to_node=to_node,
                 distance=float(distance),
+                oneway=bool(edge.get("oneway", False)),
+                road_type=str(edge.get("road_type", "default")),
             )
         )
 

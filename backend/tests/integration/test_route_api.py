@@ -24,7 +24,7 @@ def test_graph_bounds_returns_metadata(client):
     response = client.get("/graph-bounds")
     assert response.status_code == 200
     body = response.json()
-    assert body["graph_version"] == "hcm-fixture-v1"
+    assert body["graph_version"] == "hcm-fixture-v2"
     assert body["max_snap_distance_meters"] == 200
     bbox = body["bbox"]
     assert bbox["min_latitude"] == pytest.approx(10.7)
@@ -48,9 +48,24 @@ def test_shortest_path_happy_path(client):
     assert body["route_points"][0]["latitude"] == pytest.approx(
         VALID_START["latitude"]
     )
+    assert body["route_points"][0]["longitude"] == pytest.approx(
+        VALID_START["longitude"]
+    )
     assert body["route_points"][-1]["latitude"] == pytest.approx(
         VALID_END["latitude"]
     )
+    assert body["route_points"][-1]["longitude"] == pytest.approx(
+        VALID_END["longitude"]
+    )
+
+
+def test_route_same_coordinates_allows_zero_distance(client):
+    point = {"latitude": 10.778109, "longitude": 106.714456}
+    response = client.post("/route", json={"start": point, "end": point})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["distance"] == pytest.approx(0.0)
+    assert len(body["route_points"]) >= 1
 
 
 def test_shortest_path_invalid_latitude_returns_422(client):
@@ -117,3 +132,216 @@ def test_optimize_route_rejects_non_two_points(client, point_count):
     points = [VALID_START] * point_count if point_count else []
     response = client.post("/optimize-route", json={"points": points})
     assert response.status_code == 422
+
+
+def test_route_endpoint_happy_path(client):
+    response = client.post(
+        "/route",
+        json={"start": VALID_START, "end": VALID_END},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["distance"] > 0
+    assert len(body["route_points"]) >= 2
+    assert body["route_points"][0]["latitude"] == pytest.approx(
+        VALID_START["latitude"]
+    )
+    assert body["route_points"][-1]["latitude"] == pytest.approx(
+        VALID_END["latitude"]
+    )
+
+
+def test_route_endpoint_with_options(client):
+    response = client.post(
+        "/route",
+        json={
+            "start": VALID_START,
+            "end": VALID_END,
+            "options": {"avoid_road_types": [], "avoid_edge_ids": []},
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["distance"] > 0
+
+
+def test_route_endpoint_avoid_residential(client):
+    """Avoiding residential should change the route (if alternate path exists)."""
+    # First get default route
+    default = client.post(
+        "/route",
+        json={"start": VALID_START, "end": VALID_END},
+    ).json()
+
+    # Then get route avoiding residential
+    avoided = client.post(
+        "/route",
+        json={
+            "start": VALID_START,
+            "end": VALID_END,
+            "options": {"avoid_road_types": ["residential"]},
+        },
+    )
+
+    # If there's an alternate path, distance should differ
+    # If no alternate path, should get 404
+    if avoided.status_code == 200:
+        avoided_body = avoided.json()
+        assert avoided_body["distance"] > 0
+        assert avoided_body["distance"] != pytest.approx(default["distance"])
+    else:
+        assert avoided.status_code == 404
+
+
+def test_graph_bounds_new_endpoint(client):
+    response = client.get("/graph/bounds")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["graph_version"] == "hcm-fixture-v2"
+
+
+def test_assignments_happy_path(client):
+    response = client.post(
+        "/assignments",
+        json={
+            "order": {
+                "id": "o1",
+                "pickup": {"latitude": 10.7792, "longitude": 106.7155},
+                "dropoff": {"latitude": 10.7805, "longitude": 106.7168},
+            },
+            "shippers": [
+                {"id": "s1", "location": {"latitude": 10.778109, "longitude": 106.714456}},
+                {"id": "s2", "location": {"latitude": 10.785, "longitude": 106.710}},
+            ],
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["recommended_shipper_id"] is not None
+    assert len(body["ranking"]) == 2
+    # All shippers should be feasible for this connected graph
+    assert all(r["feasible"] for r in body["ranking"])
+
+
+def test_assignments_with_avoid(client):
+    response = client.post(
+        "/assignments",
+        json={
+            "order": {
+                "id": "o1",
+                "pickup": {"latitude": 10.7792, "longitude": 106.7155},
+                "dropoff": {"latitude": 10.7805, "longitude": 106.7168},
+            },
+            "shippers": [
+                {"id": "s1", "location": {"latitude": 10.778109, "longitude": 106.714456}},
+            ],
+            "options": {"avoid_road_types": []},
+        },
+    )
+    assert response.status_code == 200
+
+
+def test_tours_happy_path(client):
+    response = client.post(
+        "/tours",
+        json={
+            "shipper": {
+                "id": "s1",
+                "location": {"latitude": 10.778109, "longitude": 106.714456},
+            },
+            "orders": [
+                {
+                    "id": "o1",
+                    "pickup": {"latitude": 10.7792, "longitude": 106.7155},
+                    "dropoff": {"latitude": 10.7805, "longitude": 106.7168},
+                },
+            ],
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["shipper_id"] == "s1"
+    assert body["total_distance_meters"] > 0
+    assert len(body["ordered_stops"]) == 2
+    # Pickup should come before dropoff
+    assert body["ordered_stops"][0]["kind"] == "pickup"
+    assert body["ordered_stops"][1]["kind"] == "dropoff"
+
+
+def test_tours_two_orders(client):
+    response = client.post(
+        "/tours",
+        json={
+            "shipper": {
+                "id": "s1",
+                "location": {"latitude": 10.778109, "longitude": 106.714456},
+            },
+            "orders": [
+                {
+                    "id": "o1",
+                    "pickup": {"latitude": 10.7792, "longitude": 106.7155},
+                    "dropoff": {"latitude": 10.7805, "longitude": 106.7168},
+                },
+                {
+                    "id": "o2",
+                    "pickup": {"latitude": 10.785, "longitude": 106.710},
+                    "dropoff": {"latitude": 10.775, "longitude": 106.720},
+                },
+            ],
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["ordered_stops"]) == 4
+    assert body["total_distance_meters"] > 0
+
+
+def test_fleet_happy_path(client):
+    response = client.post(
+        "/fleet",
+        json={
+            "shippers": [
+                {"id": "s1", "location": {"latitude": 10.778109, "longitude": 106.714456}},
+                {"id": "s2", "location": {"latitude": 10.785, "longitude": 106.710}},
+            ],
+            "orders": [
+                {
+                    "id": "o1",
+                    "pickup": {"latitude": 10.7792, "longitude": 106.7155},
+                    "dropoff": {"latitude": 10.7805, "longitude": 106.7168},
+                },
+                {
+                    "id": "o2",
+                    "pickup": {"latitude": 10.785, "longitude": 106.710},
+                    "dropoff": {"latitude": 10.7792, "longitude": 106.7155},
+                },
+            ],
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["tours"]) == 2
+    assert body["total_distance_meters"] > 0
+    assert body["unassigned_order_ids"] == []
+
+
+def test_fleet_single_shipper(client):
+    response = client.post(
+        "/fleet",
+        json={
+            "shippers": [
+                {"id": "s1", "location": {"latitude": 10.778109, "longitude": 106.714456}},
+            ],
+            "orders": [
+                {
+                    "id": "o1",
+                    "pickup": {"latitude": 10.7792, "longitude": 106.7155},
+                    "dropoff": {"latitude": 10.7805, "longitude": 106.7168},
+                },
+            ],
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["tours"]) == 1
+    assert body["tours"][0]["shipper_id"] == "s1"

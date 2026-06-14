@@ -36,5 +36,5 @@ def test_health_observes_cache_growth_and_stable_repeat(monkeypatch):
             runtime, (10.7808, 106.7172), (10.7785, 106.7149)
         )
         after_reverse = client.get("/health").json()
-        assert after_reverse["cache"]["route_cache_size"] == 1
+        assert after_reverse["cache"]["route_cache_size"] == 2
         assert after_reverse["cache"]["route_cache_limit"] == 1000

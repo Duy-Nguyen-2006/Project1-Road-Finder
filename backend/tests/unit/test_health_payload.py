@@ -20,9 +20,9 @@ def test_build_health_payload_exposes_graph_and_cache(runtime):
     payload = build_health_payload(runtime)
     assert payload["status"] == "ok"
     assert payload["graph"]["loaded"] is True
-    assert payload["graph"]["graph_version"] == "hcm-fixture-v1"
-    assert payload["graph"]["node_count"] == 4
-    assert payload["graph"]["edge_count"] == 2
+    assert payload["graph"]["graph_version"] == "hcm-fixture-v2"
+    assert payload["graph"]["node_count"] == 6
+    assert payload["graph"]["edge_count"] == 5
     assert payload["cache"]["route_cache_limit"] == 1000
     assert payload["cache"]["route_cache_size"] == 0
 

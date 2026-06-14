@@ -13,15 +13,21 @@ class CachedGraphPath:
 
 
 def make_cache_key(
-    graph_version: str, start_node_id: str, end_node_id: str
+    graph_version: str,
+    options_hash: str,
+    start_node_id: str,
+    end_node_id: str,
 ) -> str:
-    return f"{graph_version}|{start_node_id}|{end_node_id}"
+    return f"{graph_version}|{options_hash}|{start_node_id}|{end_node_id}"
 
 
 def cache_lookup_key(
-    graph_version: str, start_node_id: str, end_node_id: str
+    graph_version: str,
+    options_hash: str,
+    start_node_id: str,
+    end_node_id: str,
 ) -> str:
-    return make_cache_key(graph_version, start_node_id, end_node_id)
+    return make_cache_key(graph_version, options_hash, start_node_id, end_node_id)
 
 
 @dataclass
@@ -38,33 +44,30 @@ class RouteCache:
     def get(
         self,
         graph_version: str,
+        options_hash: str,
         start_node_id: str,
         end_node_id: str,
     ) -> CachedGraphPath | None:
-        direct_key = make_cache_key(graph_version, start_node_id, end_node_id)
+        direct_key = make_cache_key(
+            graph_version, options_hash, start_node_id, end_node_id
+        )
         if direct_key in self._entries:
             self._entries.move_to_end(direct_key)
             return self._entries[direct_key]
 
-        reverse_key = make_cache_key(graph_version, end_node_id, start_node_id)
-        if reverse_key not in self._entries:
-            return None
-
-        stored = self._entries[reverse_key]
-        self._entries.move_to_end(reverse_key)
-        return CachedGraphPath(
-            node_ids=list(reversed(stored.node_ids)),
-            graph_distance_meters=stored.graph_distance_meters,
-        )
+        return None
 
     def put(
         self,
         graph_version: str,
+        options_hash: str,
         start_node_id: str,
         end_node_id: str,
         path: CachedGraphPath,
     ) -> None:
-        key = make_cache_key(graph_version, start_node_id, end_node_id)
+        key = make_cache_key(
+            graph_version, options_hash, start_node_id, end_node_id
+        )
         if key in self._entries:
             self._entries.move_to_end(key)
         self._entries[key] = path

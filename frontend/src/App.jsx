@@ -1,37 +1,49 @@
 import React, { useCallback, useMemo } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import MapView from "./components/MapView";
+import ModeSwitcher from "./components/ModeSwitcher";
+import OptionsPanel from "./components/OptionsPanel";
+import FleetResultPanel from "./components/FleetResultPanel";
 import PointList from "./components/PointList";
-import RouteControls from "./components/RouteControls";
 import {
   ACCEPTED_AREA_DETAIL,
-  findShortestPath,
   getGraphBounds,
+  postFleet,
 } from "./api/routeApi";
 import { isInsideBbox } from "./utils/geo";
 import { formatDistance } from "./utils/format";
 import {
-  ROUTE_STATUS,
-  useRoutePoints,
-} from "./hooks/useRoutePoints";
+  PLACEMENT_MODE,
+  ORDER_STEP,
+  VRP_STATUS,
+  useVrpState,
+  getShipperColor,
+} from "./hooks/useVrpState";
 
 export default function App() {
   const {
-    selectionMode,
-    setSelectionMode,
-    startPoint,
-    endPoint,
-    route,
+    placementMode,
+    setPlacementMode,
+    orderStep,
+    orders,
+    shippers,
+    pendingPickup,
+    fleetResult,
     status,
     errorMessage,
-    canFindRoute,
-    addPoint,
-    removePoint,
+    avoidRoadTypes,
+    setAvoidRoadTypes,
+    canOptimize,
+    addPickup,
+    addDropoff,
+    addShipper,
+    removeOrder,
+    removeShipper,
     clearAll,
-    beginRouteRequest,
-    completeRouteRequest,
-    failRouteRequest,
-  } = useRoutePoints();
+    beginRequest,
+    completeRequest,
+    failRequest,
+  } = useVrpState();
 
   const boundsQuery = useQuery({
     queryKey: ["graph-bounds"],
@@ -41,26 +53,22 @@ export default function App() {
   });
 
   const boundsLoaded = boundsQuery.isSuccess && Boolean(boundsQuery.data?.bbox);
-  const boundsError =
-    boundsQuery.isError && boundsQuery.error
-      ? boundsQuery.error.message
-      : "";
   const bbox = boundsLoaded ? boundsQuery.data.bbox : null;
 
   const mutation = useMutation({
-    mutationFn: findShortestPath,
+    mutationFn: postFleet,
     onMutate: () => {
-      beginRouteRequest();
+      beginRequest();
     },
     onSuccess: (data) => {
-      completeRouteRequest(data);
+      completeRequest(data);
     },
     onError: (error) => {
-      failRouteRequest(error?.message || "Có lỗi xảy ra khi tìm đường.");
+      failRequest(error?.message || "Có lỗi xảy ra khi tối ưu.");
     },
   });
 
-  const handleAddPoint = useCallback(
+  const handleMapClick = useCallback(
     (rawPoint) => {
       if (!boundsLoaded) return;
       const candidate = {
@@ -68,100 +76,139 @@ export default function App() {
         longitude: rawPoint.lng,
       };
       if (!isInsideBbox(candidate, bbox)) {
-        failRouteRequest(ACCEPTED_AREA_DETAIL);
+        failRequest(ACCEPTED_AREA_DETAIL);
         return;
       }
-      addPoint(candidate);
+
+      if (placementMode === PLACEMENT_MODE.ORDER) {
+        if (orderStep === ORDER_STEP.PICKUP) {
+          addPickup(candidate);
+        } else {
+          addDropoff(candidate);
+        }
+      } else {
+        addShipper(candidate);
+      }
     },
-    [addPoint, bbox, boundsLoaded, failRouteRequest]
+    [boundsLoaded, bbox, placementMode, orderStep, addPickup, addDropoff, addShipper, failRequest]
   );
 
-  const handleFindRoute = useCallback(() => {
-    if (!startPoint || !endPoint) return;
+  const handleOptimize = useCallback(() => {
+    if (!canOptimize) return;
     mutation.mutate({
-      start: { latitude: startPoint.latitude, longitude: startPoint.longitude },
-      end: { latitude: endPoint.latitude, longitude: endPoint.longitude },
+      shippers: shippers.map((s) => ({
+        id: s.id,
+        location: s.location,
+      })),
+      orders: orders.map((o) => ({
+        id: o.id,
+        pickup: o.pickup,
+        dropoff: o.dropoff,
+      })),
+      options: {
+        avoid_road_types: avoidRoadTypes,
+        avoid_edge_ids: [],
+      },
     });
-  }, [endPoint, mutation, startPoint]);
-
-  const selectionEnabled = boundsLoaded;
-
-  const distanceText = useMemo(
-    () => (route && typeof route.distance === "number" ? formatDistance(route.distance) : null),
-    [route]
-  );
+  }, [canOptimize, mutation, shippers, orders, avoidRoadTypes]);
 
   const statusText = useMemo(() => {
-    if (!boundsLoaded) return "Đang tải vùng hỗ trợ từ backend...";
-    if (status === ROUTE_STATUS.LOADING) return "Đang tìm đường...";
-    if (status === ROUTE_STATUS.SUCCESS && distanceText) {
-      return `Đã tìm được đường đi (${distanceText}).`;
+    if (!boundsLoaded) return "Đang tải vùng hỗ trợ...";
+    if (status === VRP_STATUS.LOADING) return "Đang tối ưu...";
+    if (status === VRP_STATUS.ERROR) return errorMessage;
+    if (status === VRP_STATUS.SUCCESS && fleetResult) {
+      return `Tổng quãng đường đội: ${formatDistance(fleetResult.total_distance_meters)}`;
     }
-    if (status === ROUTE_STATUS.ERROR) return errorMessage;
-    if (boundsError) return `Lỗi tải vùng hỗ trợ: ${boundsError}`;
-    return "Chọn Start và End trong vùng bbox đỏ, sau đó bấm Find Shortest Path.";
-  }, [boundsError, boundsLoaded, distanceText, errorMessage, status]);
+    return "Chọn đơn hàng và shipper, sau đó bấm \"Tối ưu đội\".";
+  }, [boundsLoaded, status, errorMessage, fleetResult]);
+
+  // Shipper color mapping
+  const shipperColorMap = useMemo(() => {
+    const map = {};
+    shippers.forEach((s, i) => {
+      map[s.id] = getShipperColor(i);
+    });
+    return map;
+  }, [shippers]);
 
   return (
     <div className="app-shell">
       <header className="app-header">
-        <h1>Road Finder</h1>
-        <p>Chọn Start và End trong vùng bbox đỏ của TP.HCM, bấm Find Shortest Path.</p>
+        <h1>VRP Delivery Routing</h1>
+        <p>Tối ưu giao vận đa-shipper. Chọn đơn hàng và shipper trên bản đồ.</p>
       </header>
 
       <main className="app-content">
         <section className="map-panel">
           <MapView
             bounds={bbox}
-            startPoint={startPoint}
-            endPoint={endPoint}
-            routePoints={route?.route_points}
-            selectionEnabled={selectionEnabled}
-            onAddPoint={handleAddPoint}
+            orders={orders}
+            shippers={shippers}
+            pendingPickup={pendingPickup}
+            fleetResult={fleetResult}
+            shipperColorMap={shipperColorMap}
+            selectionEnabled={boundsLoaded}
+            onAddPoint={handleMapClick}
+            placementMode={placementMode}
           />
         </section>
 
         <aside className="side-panel">
-          <RouteControls
-            selectionMode={selectionMode}
-            onSelectionModeChange={setSelectionMode}
-            startPoint={startPoint}
-            endPoint={endPoint}
-            status={status}
-            boundsLoaded={boundsLoaded}
-            onFindRoute={handleFindRoute}
-            onClear={clearAll}
+          <ModeSwitcher
+            placementMode={placementMode}
+            onPlacementModeChange={setPlacementMode}
+            orderStep={orderStep}
           />
+
+          <OptionsPanel
+            avoidRoadTypes={avoidRoadTypes}
+            onAvoidRoadTypesChange={setAvoidRoadTypes}
+          />
+
+          <div className="panel-card controls-card">
+            <button
+              className="primary-button"
+              onClick={handleOptimize}
+              disabled={!canOptimize}
+              type="button"
+            >
+              {status === VRP_STATUS.LOADING ? "Đang tối ưu..." : "Tối ưu đội"}
+            </button>
+            <button
+              className="secondary-button"
+              onClick={clearAll}
+              disabled={orders.length === 0 && shippers.length === 0}
+              type="button"
+            >
+              Xóa tất cả
+            </button>
+          </div>
 
           <PointList
-            startPoint={startPoint}
-            endPoint={endPoint}
-            onRemovePoint={removePoint}
+            orders={orders}
+            shippers={shippers}
+            shipperColorMap={shipperColorMap}
+            onRemoveOrder={removeOrder}
+            onRemoveShipper={removeShipper}
           />
 
-          <div className="panel-card">
-            <h2>Kết quả</h2>
-            {status === ROUTE_STATUS.SUCCESS && route ? (
-              <>
-                <p>
-                  <strong>Quãng đường:</strong> {distanceText}
-                </p>
-                <p className="helper-text">
-                  Từ node {route.start_node_id} đến node {route.end_node_id}.
-                </p>
-              </>
-            ) : (
+          {status === VRP_STATUS.SUCCESS && fleetResult ? (
+            <FleetResultPanel
+              fleetResult={fleetResult}
+              shipperColorMap={shipperColorMap}
+            />
+          ) : (
+            <div className="panel-card">
+              <h2>Trạng thái</h2>
               <p
                 className={
-                  status === ROUTE_STATUS.ERROR || boundsError
-                    ? "error-text"
-                    : "helper-text"
+                  status === VRP_STATUS.ERROR ? "error-text" : "helper-text"
                 }
               >
                 {statusText}
               </p>
-            )}
-          </div>
+            </div>
+          )}
         </aside>
       </main>
     </div>
