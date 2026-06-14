@@ -120,7 +120,7 @@ def assignments(request: Request, body: AssignmentRequest) -> AssignmentResponse
                         clicked_start=shipper_click,
                         start_snap_distance_meters=snap.distance_meters,
                         clicked_end=pickup_click,
-                        end_snap_distance_meters=0.0,
+                        end_snap_distance_meters=pickup_snap.distance_meters,
                         path_node_ids=path_pickup,
                         graph_distance_meters=dist_pickup,
                         kind="to_pickup",
@@ -130,9 +130,9 @@ def assignments(request: Request, body: AssignmentRequest) -> AssignmentResponse
                     build_assignment_leg(
                         lookup,
                         clicked_start=pickup_click,
-                        start_snap_distance_meters=0.0,
+                        start_snap_distance_meters=pickup_snap.distance_meters,
                         clicked_end=dropoff_click,
-                        end_snap_distance_meters=0.0,
+                        end_snap_distance_meters=dropoff_snap.distance_meters,
                         path_node_ids=path_drop,
                         graph_distance_meters=dist_drop,
                         kind="to_dropoff",
@@ -172,6 +172,7 @@ def tours(request: Request, body: TourRequest) -> TourResponse:
 
         stops: list[Stop] = []
         stop_coordinates: dict[tuple[str, str], tuple[float, float]] = {}
+        stop_snap_distances: dict[tuple[str, str], float] = {}
         all_nodes = [shipper_snap.node_id]
         for order in body.orders:
             pickup_snap = snap_point(runtime, order.pickup.latitude, order.pickup.longitude)
@@ -180,6 +181,8 @@ def tours(request: Request, body: TourRequest) -> TourResponse:
             stops.append(Stop(order_id=order.id, kind="dropoff", node_id=dropoff_snap.node_id))
             stop_coordinates[(order.id, "pickup")] = (order.pickup.latitude, order.pickup.longitude)
             stop_coordinates[(order.id, "dropoff")] = (order.dropoff.latitude, order.dropoff.longitude)
+            stop_snap_distances[(order.id, "pickup")] = pickup_snap.distance_meters
+            stop_snap_distances[(order.id, "dropoff")] = dropoff_snap.distance_meters
             all_nodes.extend([pickup_snap.node_id, dropoff_snap.node_id])
 
         # Pre-compute distances
@@ -205,6 +208,7 @@ def tours(request: Request, body: TourRequest) -> TourResponse:
             shipper_node_id=shipper_snap.node_id,
             ordered_stops=tour.ordered_stops,
             stop_coordinates=stop_coordinates,
+            stop_snap_distances=stop_snap_distances,
             cost_matrix=cost_matrix,
         )
 
@@ -237,6 +241,7 @@ def fleet(request: Request, body: FleetRequest) -> FleetResponse:
 
         orders_data = []
         stop_coordinates: dict[tuple[str, str], tuple[float, float]] = {}
+        stop_snap_distances: dict[tuple[str, str], float] = {}
         all_nodes = list(shipper_nodes.values())
         for order in body.orders:
             pickup_snap = snap_point(runtime, order.pickup.latitude, order.pickup.longitude)
@@ -244,6 +249,8 @@ def fleet(request: Request, body: FleetRequest) -> FleetResponse:
             orders_data.append((order.id, pickup_snap.node_id, dropoff_snap.node_id))
             stop_coordinates[(order.id, "pickup")] = (order.pickup.latitude, order.pickup.longitude)
             stop_coordinates[(order.id, "dropoff")] = (order.dropoff.latitude, order.dropoff.longitude)
+            stop_snap_distances[(order.id, "pickup")] = pickup_snap.distance_meters
+            stop_snap_distances[(order.id, "dropoff")] = dropoff_snap.distance_meters
             all_nodes.extend([pickup_snap.node_id, dropoff_snap.node_id])
 
         # Pre-compute distances
@@ -277,6 +284,7 @@ def fleet(request: Request, body: FleetRequest) -> FleetResponse:
                 shipper_node_id=shipper_nodes[sid],
                 ordered_stops=tour.ordered_stops,
                 stop_coordinates=stop_coordinates,
+                stop_snap_distances=stop_snap_distances,
                 cost_matrix=cost_matrix,
             )
 

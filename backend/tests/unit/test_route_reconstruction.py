@@ -11,7 +11,7 @@ from app.domain.route_reconstruction import (
     dedupe_adjacent_exact_coordinates,
     reconstruct_route_points,
 )
-from app.domain.snapper import snap_point
+from app.application.snap_service import snap_point
 
 FIXTURE_GRAPH_PATH = (
     Path(__file__).resolve().parents[2] / "app" / "data" / "road_graph.json"

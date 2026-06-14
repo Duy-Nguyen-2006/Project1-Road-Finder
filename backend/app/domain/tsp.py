@@ -142,23 +142,24 @@ def _two_opt_improve(
     iteration = 0
     current = list(stops)
 
+    current_dist = _tour_distance(current, cost_matrix)
+
     while improved and iteration < max_iterations:
         improved = False
         iteration += 1
 
         for i in range(len(current) - 1):
             for j in range(i + 2, len(current)):
-                # Try reversing segment [i+1, j]
                 candidate = current[:i + 1] + current[i + 1:j + 1][::-1] + current[j + 1:]
 
                 if not _check_precedence(candidate):
                     continue
 
-                current_dist = _tour_distance(current, cost_matrix)
                 candidate_dist = _tour_distance(candidate, cost_matrix)
 
                 if candidate_dist < current_dist:
                     current = candidate
+                    current_dist = candidate_dist
                     improved = True
                     break
             if improved:

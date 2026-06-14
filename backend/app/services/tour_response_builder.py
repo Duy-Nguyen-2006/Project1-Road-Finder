@@ -16,6 +16,7 @@ def build_tour_legs(
     shipper_node_id: str,
     ordered_stops: list[Stop],
     stop_coordinates: dict[tuple[str, str], tuple[float, float]],
+    stop_snap_distances: dict[tuple[str, str], float],
     cost_matrix: DistanceProvider,
 ) -> list[LegResponse]:
     """Build legs with snap-aware geometry like POST /route."""
@@ -41,7 +42,7 @@ def build_tour_legs(
             current_snap_dist = 0.0
             continue
 
-        end_snap = 0.0
+        end_snap = stop_snap_distances.get((stop.order_id, stop.kind), 0.0)
         route_points, distance = leg_route_points_and_distance(
             lookup,
             clicked_start=current_click,

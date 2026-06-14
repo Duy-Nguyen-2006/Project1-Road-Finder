@@ -6,7 +6,7 @@ import pytest
 
 from app.application.graph_runtime import build_graph_runtime
 from app.domain.errors import AcceptedAreaError
-from app.domain.snapper import snap_point
+from app.application.snap_service import snap_point
 from app.utils.distance import haversine_meters
 
 FIXTURE_GRAPH_PATH = (

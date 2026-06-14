@@ -122,6 +122,7 @@ def _intra_route_2opt(
 
     improved = True
     current = list(stops)
+    current_dist = _compute_tour_distance(shipper_node, current, cost_matrix)
 
     while improved:
         improved = False
@@ -131,10 +132,10 @@ def _intra_route_2opt(
                 if not _check_precedence(candidate):
                     continue
 
-                old_dist = _compute_tour_distance(shipper_node, current, cost_matrix)
                 new_dist = _compute_tour_distance(shipper_node, candidate, cost_matrix)
-                if new_dist < old_dist:
+                if new_dist < current_dist:
                     current = candidate
+                    current_dist = new_dist
                     improved = True
                     break
             if improved:
@@ -185,13 +186,13 @@ def _inter_route_relocate(
                     best_cost = float("inf")
 
                     for p_pos in range(len(dst_stops) + 1):
-                        for d_pos in range(p_pos + 1, len(dst_stops) + 2):
-                            candidate = (
-                                dst_stops[:p_pos]
-                                + [pickup_stop]
-                                + dst_stops[p_pos:d_pos - 1]
-                                + [dropoff_stop]
-                                + dst_stops[d_pos - 1:]
+                        for d_pos in range(p_pos, len(dst_stops) + 1):
+                            candidate = _insert_pickup_dropoff(
+                                dst_stops,
+                                p_pos,
+                                d_pos,
+                                pickup_stop,
+                                dropoff_stop,
                             )
                             if not _check_precedence(candidate):
                                 continue

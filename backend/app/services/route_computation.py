@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from app.application.graph_runtime import GraphRuntime
 from app.application.node_lookup import GraphNodeLookup
 from app.domain.cost_model import RoutingOptions
 from app.domain.route_reconstruction import reconstruct_route
 from app.models.point import Point
-from app.models.route_models import ShortestPathResponse
 from app.services.shortest_path_service import find_cached_or_compute_graph_path
+
+
+@dataclass(frozen=True)
+class ComputedRoute:
+    route_points: list[Point]
+    distance: float
 
 
 def compute_shortest_path_response(
@@ -14,7 +21,7 @@ def compute_shortest_path_response(
     start: Point,
     end: Point,
     options: RoutingOptions | None = None,
-) -> ShortestPathResponse:
+) -> ComputedRoute:
     graph_result = find_cached_or_compute_graph_path(
         runtime,
         (start.latitude, start.longitude),
@@ -35,9 +42,7 @@ def compute_shortest_path_response(
         Point(latitude=p.latitude, longitude=p.longitude)
         for p in reconstructed.route_points
     ]
-    return ShortestPathResponse(
+    return ComputedRoute(
         route_points=route_points,
         distance=reconstructed.distance_meters,
-        start_node_id=graph_result.start_node_id,
-        end_node_id=graph_result.end_node_id,
     )
