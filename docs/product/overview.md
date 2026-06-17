@@ -1,38 +1,70 @@
 # Product Overview
 
-Road Finder is a web app that lets a user choose a Start point and an End point on a map, then asks the backend to find the shortest path between them on a road graph.
+Road Finder — VRP Delivery Routing là web app giúp tối ưu giao vận
+đa-shipper trên bản đồ TP.HCM. User chọn nhiều **đơn hàng** (mỗi đơn có
+pickup + dropoff) và nhiều **shipper** trên bản đồ, backend gợi ý phân
+đội + tối ưu tuyến đường ngắn nhất theo ràng buộc pickup trước dropoff.
 
 ## Vision
 
-Help a user visually select two locations and see the shortest available road route between them.
+Giúp dispatcher giao vận trong TP.HCM trực quan hoá và tối ưu phân công
+shipper — đơn trong vài giây, không cần chạy solver ngoài.
 
-## Primary Flow
+## Primary Flow (fleet)
 
-1. User opens the web app.
-2. User selects a Start point on the map.
-3. User selects an End point on the map.
-4. User clicks **Find Shortest Path**.
-5. Backend finds the shortest path using Dijkstra.
-6. Frontend draws the resulting route on the map.
-7. Frontend displays useful route metadata such as total distance.
+1. User mở web app.
+2. App load `GET /graph/bounds`, vẽ bbox đỏ TP.HCM.
+3. User chọn mode **Order**, click map lần 1 → pickup, click lần 2 → dropoff
+   → tạo xong 1 order. Lặp lại cho mỗi đơn.
+4. User chọn mode **Shipper**, click map → đặt vị trí shipper. Lặp lại
+   cho mỗi shipper.
+5. (Optional) User bật/tắt `avoid_road_types` trong OptionsPanel.
+6. User bấm **Tối ưu đội** → gọi `POST /fleet`.
+7. Backend trả `tours` (mỗi shipper 1 tour gồm `ordered_stops` + `legs` +
+   `total_distance_meters`) + `unassigned_order_ids` + flag `optimal`.
+8. Frontend vẽ polyline màu theo shipper, auto-fit map, hiển thị tổng
+   khoảng cách + từng tour trong `FleetResultPanel`.
 
-## Out of Scope (First Version)
+## Sub-Flows
 
-- Waypoint ordering / TSP
+- **Route** (`POST /route`): 1 điểm → 1 điểm. Dùng cho smoke test và
+  tích hợp downstream.
+- **Assignment** (`POST /assignments`): 1 đơn + N shipper → ranking +
+  recommended. Dùng khi đã biết đơn cần gán và muốn xếp hạng shipper
+  theo tổng quãng đường 2 leg.
+- **Tour** (`POST /tours`): 1 shipper + N đơn → 1 tour tối ưu (TSP).
+  Dùng khi đã biết shipper phụ trách và muốn sắp thứ tự đơn.
+
+Cả 4 flow dùng chung `CostMatrix` (Bidirectional Dijkstra many-to-many
+cached theo `graph_version` + `options_hash`) + `leg_builder` (snap +
+graph + snap với dedupe).
+
+## Out of Scope (MVP)
+
+- Drag marker
+- Real-time re-route khi shipper di chuyển
 - Turn-by-turn navigation
 - Live traffic
-- User accounts
-- Saved routes
+- User accounts / saved routes
 - Mobile-native behavior
+- OSRM geometry smoothing (SPEC §11 future)
 
 ## Stack
 
-- Backend: FastAPI (Python)
-- Frontend: React + Vite + Leaflet
-- Data: Local OSM-derived graph JSON
+- **Backend**: FastAPI (Python 3.10+), Uvicorn, Pydantic v2, pure stdlib
+  cho algorithm (`heapq` + `math` + `itertools`).
+- **Frontend**: React 18 + Vite + React Leaflet + TanStack Query + fetch.
+- **Data**: Local HCM road graph JSON (committed, < 50MB, hỗ trợ
+  `oneway` + `road_type`).
+- **Algorithm**: Bidirectional Dijkstra (directed), CostMatrix (cached),
+  Assignment (rank), TSP (brute-force + nearest-neighbor + 2-opt),
+  VRP (cheapest-insertion + intra 2-opt + inter relocate, brute-force cho
+  instance nhỏ).
 
 ## Related Docs
 
-- `routing.md` — Algorithm and graph details
-- `api.md` — HTTP contracts
-- `frontend-flow.md` — UI interactions
+- `routing.md` — Algorithm, cost model, graph details
+- `api.md` — HTTP contracts cho 6 endpoint
+- `frontend-flow.md` — UI state + component tree + tương tác
+- `../../Walkthrough.md` — phase tracker
+- `../../README.md` — quickstart + tổng quan
