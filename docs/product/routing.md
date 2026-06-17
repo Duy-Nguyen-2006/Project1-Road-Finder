@@ -40,8 +40,19 @@ Multiplier mặc định theo `road_type` (`app/domain/cost_model.py`):
 - `avoid_road_types: tuple[str, ...]` — cạnh thuộc type này có cost = `inf`
   (Dijkstra sẽ không đi qua).
 - `avoid_edge_ids: tuple[str, ...]` — tương tự cho edge ID cụ thể.
+- `tsp_brute_force_max_stops: int | None` — ngưỡng brute-force cho `optimize_tour`.
+  Khi `len(stops) <= threshold` (default 8), solver thử mọi permutation
+  (đảm bảo optimal). Set = 0 để tắt brute-force (luôn dùng NN + 2-opt).
+  `None` nghĩa là dùng default.
+- `vrp_brute_force_max_orders: int | None` — ngưỡng số đơn để trigger
+  brute-force VRP (default 3). `solve_vrp` thử mọi `product(shipper_ids,
+  repeat=len(orders))` khi `len(orders) <= threshold` AND
+  `len(shippers) <= vrp_brute_force_max_shippers`.
+- `vrp_brute_force_max_shippers: int | None` — ngưỡng số shipper cho
+  brute-force VRP (default 2).
 
-Mọi request đều nhận `options` (optional, default rỗng).
+Mọi request đều nhận `options` (optional, default rỗng). Solver thresholds
+cho phép caller tune tradeoff optimality vs response time khi input lớn.
 
 ## Graph Source
 

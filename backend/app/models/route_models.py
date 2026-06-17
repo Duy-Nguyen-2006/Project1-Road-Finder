@@ -6,6 +6,11 @@ from app.models.point import Point
 class RoutingOptionsRequest(BaseModel):
     avoid_road_types: list[str] = Field(default_factory=list)
     avoid_edge_ids: list[str] = Field(default_factory=list)
+    # Solver thresholds. None (or omitted) means "use the server default".
+    # 0 disables the brute-force path entirely (always heuristic).
+    tsp_brute_force_max_stops: int | None = Field(default=None, ge=0)
+    vrp_brute_force_max_orders: int | None = Field(default=None, ge=0)
+    vrp_brute_force_max_shippers: int | None = Field(default=None, ge=0)
 
 
 class GraphBoundsResponse(BaseModel):

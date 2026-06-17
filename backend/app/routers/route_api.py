@@ -43,6 +43,9 @@ def _to_routing_options(options_req) -> RoutingOptions:
     return RoutingOptions(
         avoid_road_types=tuple(options_req.avoid_road_types),
         avoid_edge_ids=tuple(options_req.avoid_edge_ids),
+        tsp_brute_force_max_stops=options_req.tsp_brute_force_max_stops,
+        vrp_brute_force_max_orders=options_req.vrp_brute_force_max_orders,
+        vrp_brute_force_max_shippers=options_req.vrp_brute_force_max_shippers,
     )
 
 
@@ -189,7 +192,7 @@ def tours(request: Request, body: TourRequest) -> TourResponse:
         cost_matrix.compute_for_nodes(all_nodes)
 
         # Optimize tour
-        tour = optimize_tour(shipper_snap.node_id, stops, cost_matrix)
+        tour = optimize_tour(shipper_snap.node_id, stops, cost_matrix, options=options)
 
         # Build response
         ordered_stops = []
@@ -262,6 +265,7 @@ def fleet(request: Request, body: FleetRequest) -> FleetResponse:
             shipper_nodes=shipper_nodes,
             orders=orders_data,
             cost_matrix=cost_matrix,
+            options=options,
         )
 
         # Build response

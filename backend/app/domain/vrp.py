@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from itertools import permutations, product
 
+from app.domain.cost_model import RoutingOptions
 from app.domain.protocols import DistanceProvider
 from app.domain.tsp import Stop, Tour, _check_precedence, optimize_tour
 
@@ -235,13 +236,25 @@ def solve_vrp(
     shipper_nodes: dict[str, str],
     orders: list[tuple[str, str, str]],  # (order_id, pickup_node, dropoff_node)
     cost_matrix: DistanceProvider,
-    brute_force_threshold: int = 3,
+    *,
+    brute_force_threshold: int | None = None,
+    max_brute_force_shippers: int | None = None,
     max_brute_force_stops_per_tour: int = 6,
+    options: RoutingOptions | None = None,
 ) -> FleetPlan:
     """Solve the VRP: assign orders to shippers and optimize tours.
 
-    For small instances (≤ threshold orders), uses brute-force for optimality.
-    For larger instances, uses cheapest insertion + local search.
+    For small instances (≤ threshold orders AND ≤ max_shippers shippers),
+    uses brute-force for optimality. For larger instances, uses cheapest
+    insertion + local search.
+
+    Threshold resolution order:
+    1. `options.vrp_brute_force_max_orders` / `options.vrp_brute_force_max_shippers`
+    2. `brute_force_threshold` / `max_brute_force_shippers` (explicit override)
+    3. `RoutingOptions.DEFAULT_VRP_BRUTE_FORCE_MAX_ORDERS` (3) /
+       `RoutingOptions.DEFAULT_VRP_BRUTE_FORCE_MAX_SHIPPERS` (2)
+
+    A threshold of 0 disables that side of the brute-force condition.
     """
     if not orders:
         return FleetPlan(
@@ -252,14 +265,32 @@ def solve_vrp(
             optimal=True,
         )
 
+    # Resolve thresholds: options > explicit kwargs > defaults
+    if options is not None:
+        order_threshold = options.resolved_vrp_order_threshold()
+        shipper_threshold = options.resolved_vrp_shipper_threshold()
+    else:
+        if brute_force_threshold is None:
+            from app.domain.cost_model import DEFAULT_VRP_BRUTE_FORCE_MAX_ORDERS
+            order_threshold = DEFAULT_VRP_BRUTE_FORCE_MAX_ORDERS
+        else:
+            order_threshold = brute_force_threshold
+        if max_brute_force_shippers is None:
+            from app.domain.cost_model import DEFAULT_VRP_BRUTE_FORCE_MAX_SHIPPERS
+            shipper_threshold = DEFAULT_VRP_BRUTE_FORCE_MAX_SHIPPERS
+        else:
+            shipper_threshold = max_brute_force_shippers
+
     # Check if small enough for brute-force
-    if len(orders) <= brute_force_threshold and len(shipper_ids) <= 2:
+    if order_threshold > 0 and len(orders) <= order_threshold \
+            and shipper_threshold > 0 and len(shipper_ids) <= shipper_threshold:
         result = _brute_force_vrp(
             shipper_ids,
             shipper_nodes,
             orders,
             cost_matrix,
             max_stops_per_tour=max_brute_force_stops_per_tour,
+            options=options,
         )
         if result:
             return result
@@ -324,6 +355,7 @@ def _brute_force_vrp(
     orders: list[tuple[str, str, str]],
     cost_matrix: DistanceProvider,
     max_stops_per_tour: int = 6,
+    options: RoutingOptions | None = None,
 ) -> FleetPlan | None:
     """Brute-force VRP for small instances.
 
@@ -377,7 +409,7 @@ def _brute_force_vrp(
                 )))
                 continue
 
-            tour = optimize_tour(shipper_nodes[sid], stops, cost_matrix)
+            tour = optimize_tour(shipper_nodes[sid], stops, cost_matrix, options=options)
             if not tour.optimal:
                 all_optimal = False
             total += tour.total_distance_meters

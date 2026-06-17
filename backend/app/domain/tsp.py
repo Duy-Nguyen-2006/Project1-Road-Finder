@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from itertools import permutations
 
+from app.domain.cost_model import RoutingOptions
 from app.domain.protocols import DistanceProvider
 
 
@@ -172,7 +173,9 @@ def optimize_tour(
     shipper_node: str,
     stops: list[Stop],
     cost_matrix: DistanceProvider,
-    n_small_threshold: int = 8,
+    *,
+    n_small_threshold: int | None = None,
+    options: RoutingOptions | None = None,
 ) -> Tour:
     """Optimize a tour for a single shipper visiting multiple stops.
 
@@ -182,9 +185,25 @@ def optimize_tour(
 
     For n ≤ threshold: brute-force optimal.
     For n > threshold: nearest-neighbor + 2-opt heuristic.
+
+    Threshold resolution order:
+    1. `options.tsp_brute_force_max_stops` (if `options` given)
+    2. `n_small_threshold` (explicit override)
+    3. `RoutingOptions.DEFAULT_TSP_BRUTE_FORCE_MAX_STOPS` (8)
+
+    A threshold of 0 disables the brute-force path entirely.
     """
     if not stops:
         return Tour(ordered_stops=[], total_distance_meters=0.0, optimal=True)
+
+    # Resolve threshold: options > explicit kwarg > default
+    if options is not None:
+        threshold = options.resolved_tsp_threshold()
+    elif n_small_threshold is not None:
+        threshold = n_small_threshold
+    else:
+        from app.domain.cost_model import DEFAULT_TSP_BRUTE_FORCE_MAX_STOPS
+        threshold = DEFAULT_TSP_BRUTE_FORCE_MAX_STOPS
 
     # Add shipper start as first stop conceptually
     # For brute-force, we need to consider all permutations of stops
@@ -192,7 +211,7 @@ def optimize_tour(
 
     n = len(stops)
 
-    if n <= n_small_threshold:
+    if threshold > 0 and n <= threshold:
         # Try brute-force with shipper_node as fixed start
         result = _brute_force_with_start(stops, shipper_node, cost_matrix)
         if result:

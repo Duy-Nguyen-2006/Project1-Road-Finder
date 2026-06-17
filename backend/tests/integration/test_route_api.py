@@ -297,3 +297,70 @@ def test_fleet_single_shipper(client):
     body = response.json()
     assert len(body["tours"]) == 1
     assert body["tours"][0]["shipper_id"] == "s1"
+
+
+def test_fleet_threshold_zero_disables_brute_force(client):
+    """With vrp_brute_force_max_orders=0, the brute-force path is skipped
+    even on a small instance, so 'optimal' must be False."""
+    response = client.post(
+        "/fleet",
+        json={
+            "shippers": [
+                {"id": "s1", "location": {"latitude": 10.778109, "longitude": 106.714456}},
+                {"id": "s2", "location": {"latitude": 10.785, "longitude": 106.710}},
+            ],
+            "orders": [
+                {
+                    "id": "o1",
+                    "pickup": {"latitude": 10.7792, "longitude": 106.7155},
+                    "dropoff": {"latitude": 10.7805, "longitude": 106.7168},
+                },
+            ],
+            "options": {
+                "avoid_road_types": [],
+                "avoid_edge_ids": [],
+                "vrp_brute_force_max_orders": 0,
+            },
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    # 1 order with 2 shippers would normally trigger brute-force (optimal=true),
+    # but with threshold=0 the heuristic path is used.
+    assert body["optimal"] is False
+
+
+def test_tours_threshold_zero_disables_brute_force(client):
+    """With tsp_brute_force_max_stops=0, the brute-force path is skipped
+    even on a small instance, so 'optimal' must be False."""
+    response = client.post(
+        "/tours",
+        json={
+            "shipper": {
+                "id": "s1",
+                "location": {"latitude": 10.778109, "longitude": 106.714456},
+            },
+            "orders": [
+                {
+                    "id": "o1",
+                    "pickup": {"latitude": 10.7792, "longitude": 106.7155},
+                    "dropoff": {"latitude": 10.7805, "longitude": 106.7168},
+                },
+                {
+                    "id": "o2",
+                    "pickup": {"latitude": 10.785, "longitude": 106.710},
+                    "dropoff": {"latitude": 10.775, "longitude": 106.720},
+                },
+            ],
+            "options": {
+                "avoid_road_types": [],
+                "avoid_edge_ids": [],
+                "tsp_brute_force_max_stops": 0,
+            },
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    # 4 stops is under the default threshold (8), so brute-force would run
+    # and return optimal=true; with the override to 0 it must be False.
+    assert body["optimal"] is False
