@@ -121,12 +121,11 @@ def test_service_reverse_computes_separate_cache_entry_on_directed_graph(runtime
 
 
 def test_oneway_reverse_is_not_served_from_forward_cache(tmp_path):
-    path = _write_versioned_graph(tmp_path, "oneway-v1")
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    payload["edges"] = [
-        {"from": "a", "to": "b", "distance": 100.0, "oneway": True},
-    ]
-    path.write_text(json.dumps(payload), encoding="utf-8")
+    path = _write_versioned_graph(
+        tmp_path,
+        "oneway-v1",
+        edges=[{"from": "a", "to": "b", "distance": 100.0, "oneway": True}],
+    )
     runtime = build_graph_runtime(path)
     from app.domain.errors import NoRouteError
 
@@ -146,8 +145,14 @@ def test_cache_lookup_key_matches_storage_key():
     assert cache_lookup_key("v", "o", "a", "b") == make_cache_key("v", "o", "a", "b")
 
 
-def _write_versioned_graph(tmp_path: Path, version: str) -> Path:
-    path = tmp_path / "graph.json"
+def _write_versioned_graph(
+    tmp_path: Path,
+    version: str,
+    *,
+    edges: list[dict] | None = None,
+) -> Path:
+    path = (tmp_path / "graph.json").resolve()
+    assert path.is_relative_to(tmp_path.resolve())
     payload = {
         "metadata": {
             "graph_version": version,
@@ -163,7 +168,7 @@ def _write_versioned_graph(tmp_path: Path, version: str) -> Path:
             "a": {"latitude": 10.5, "longitude": 106.5},
             "b": {"latitude": 10.51, "longitude": 106.51},
         },
-        "edges": [{"from": "a", "to": "b", "distance": 10.0}],
+        "edges": edges if edges is not None else [{"from": "a", "to": "b", "distance": 10.0}],
     }
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path

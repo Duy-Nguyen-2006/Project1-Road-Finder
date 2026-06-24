@@ -18,6 +18,35 @@ CREATE TABLE IF NOT EXISTS schema_version (
 INSERT INTO schema_version (version) VALUES (1);
 
 ----------------------------------------------------------------------
+-- Canonical enum values (single source of truth for repeated literals)
+----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS enum_risk_lane (
+    value TEXT PRIMARY KEY
+);
+INSERT OR IGNORE INTO enum_risk_lane (value) VALUES
+    ('tiny'),
+    ('normal'),
+    ('high_risk');
+
+CREATE TABLE IF NOT EXISTS enum_decision_status (
+    value TEXT PRIMARY KEY
+);
+INSERT OR IGNORE INTO enum_decision_status (value) VALUES
+    ('proposed'),
+    ('accepted'),
+    ('superseded'),
+    ('rejected');
+
+CREATE TABLE IF NOT EXISTS enum_backlog_status (
+    value TEXT PRIMARY KEY
+);
+INSERT OR IGNORE INTO enum_backlog_status (value) VALUES
+    ('proposed'),
+    ('accepted'),
+    ('implemented'),
+    ('rejected');
+
+----------------------------------------------------------------------
 -- Intake: classifying incoming work
 ----------------------------------------------------------------------
 CREATE TABLE intake (
@@ -29,8 +58,7 @@ CREATE TABLE intake (
                            'new_initiative','maintenance','harness_improvement'
                          )),
     summary       TEXT    NOT NULL,
-    risk_lane     TEXT    NOT NULL
-                         CHECK(risk_lane IN ('tiny','normal','high_risk')),
+    risk_lane     TEXT    NOT NULL REFERENCES enum_risk_lane(value),
     risk_flags    TEXT,          -- JSON array, e.g. ["auth","data_model"]
     affected_docs TEXT,          -- JSON array of doc paths
     story_id      TEXT,          -- links to story.id when one is created
@@ -45,8 +73,7 @@ CREATE TABLE story (
     id               TEXT PRIMARY KEY,   -- e.g. US-001
     title            TEXT NOT NULL,
     created_at       TEXT NOT NULL DEFAULT (datetime('now')),
-    risk_lane        TEXT NOT NULL
-                     CHECK(risk_lane IN ('tiny','normal','high_risk')),
+    risk_lane        TEXT NOT NULL REFERENCES enum_risk_lane(value),
     contract_doc     TEXT,               -- path to product doc
     status           TEXT NOT NULL DEFAULT 'planned'
                      CHECK(status IN (
@@ -68,9 +95,7 @@ CREATE TABLE decision (
     title                 TEXT NOT NULL,
     created_at            TEXT NOT NULL DEFAULT (datetime('now')),
     status                TEXT NOT NULL DEFAULT 'proposed'
-                          CHECK(status IN (
-                            'proposed','accepted','superseded','rejected'
-                          )),
+                          REFERENCES enum_decision_status(value),
     doc_path              TEXT,              -- path to the markdown ADR
     verify_command        TEXT,              -- optional check command
     last_verified_at      TEXT,
@@ -92,11 +117,9 @@ CREATE TABLE backlog (
     discovered_while      TEXT,
     current_pain          TEXT,
     suggested_improvement TEXT,
-    risk                  TEXT    CHECK(risk IN ('tiny','normal','high_risk')),
+    risk                  TEXT    REFERENCES enum_risk_lane(value),
     status                TEXT    NOT NULL DEFAULT 'proposed'
-                          CHECK(status IN (
-                            'proposed','accepted','implemented','rejected'
-                          )),
+                          REFERENCES enum_backlog_status(value),
     predicted_impact      TEXT,
     actual_outcome        TEXT,
     implemented_at        TEXT,

@@ -179,9 +179,9 @@ def test_dedupe_adjacent_exact_coordinates_only():
     ]
     deduped = dedupe_adjacent_exact_coordinates(raw)
     assert len(deduped) == 3
-    assert deduped[0].latitude == 1.0
-    assert deduped[1].latitude == 2.0
-    assert deduped[2].latitude == 3.0
+    assert deduped[0].latitude == pytest.approx(1.0)
+    assert deduped[1].latitude == pytest.approx(2.0)
+    assert deduped[2].latitude == pytest.approx(3.0)
 
 
 def _has_adjacent_duplicate(route: list[RouteCoordinate]) -> bool:

@@ -90,6 +90,16 @@ def sample_graph_payload(graph_version: str) -> dict:
     }
 
 
+def resolve_safe_output_path(output: Path) -> Path:
+    resolved = output.expanduser().resolve()
+    repo_root = REPO_ROOT.resolve()
+    if not resolved.is_relative_to(repo_root):
+        raise SystemExit(
+            f"Output path must stay inside the repository root: {resolved}"
+        )
+    return resolved
+
+
 def validate_output_size(path: Path) -> None:
     size = path.stat().st_size
     if size >= MAX_OUTPUT_BYTES:
@@ -132,15 +142,16 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     payload = sample_graph_payload(args.graph_version)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    validate_output_size(args.output)
+    output_path = resolve_safe_output_path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    validate_output_size(output_path)
 
     sys.path.insert(0, str(BACKEND_ROOT))
     from app.infrastructure.graph_loader import load_graph_data
 
-    load_graph_data(args.output)
-    print(f"Wrote SPEC-shaped sample graph to {args.output}")
+    load_graph_data(output_path)
+    print(f"Wrote SPEC-shaped sample graph to {output_path}")
     return 0
 
 

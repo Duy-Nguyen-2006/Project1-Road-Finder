@@ -100,8 +100,7 @@ def test_app_startup_fails_when_graph_missing(monkeypatch, tmp_path):
     from app.main import create_app
 
     with pytest.raises(GraphValidationError):
-        with TestClient(create_app()) as _client:
-            pass
+        TestClient(create_app()).__enter__()
 
 
 def test_app_startup_loads_graph_when_valid(monkeypatch):
