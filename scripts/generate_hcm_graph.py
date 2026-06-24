@@ -91,26 +91,13 @@ def sample_graph_payload(graph_version: str) -> dict:
     }
 
 
-def resolve_safe_output_path(output: Path) -> Path:
-    filename = output.name
-    if not filename or filename in {".", ".."}:
-        raise SystemExit(f"Invalid output filename: {output}")
-    safe_path = (ALLOWED_OUTPUT_DIR / filename).resolve()
+def write_sample_graph(payload: dict) -> Path:
+    safe_path = DEFAULT_OUTPUT.resolve()
     if not safe_path.is_relative_to(ALLOWED_OUTPUT_DIR):
         raise SystemExit(
-            f"Output path must stay inside {ALLOWED_OUTPUT_DIR}: {safe_path}"
+            f"Default output must stay inside {ALLOWED_OUTPUT_DIR}: {safe_path}"
         )
-    return safe_path
-
-
-def write_sample_graph(output: Path, payload: dict) -> Path:
-    safe_path = resolve_safe_output_path(output)
-    parent_dir = safe_path.parent.resolve()
-    if not parent_dir.is_relative_to(ALLOWED_OUTPUT_DIR):
-        raise SystemExit(
-            f"Output parent must stay inside {ALLOWED_OUTPUT_DIR}: {parent_dir}"
-        )
-    parent_dir.mkdir(parents=True, exist_ok=True)
+    ALLOWED_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     safe_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return safe_path
 
@@ -156,8 +143,13 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
+    if args.output.resolve() != DEFAULT_OUTPUT.resolve():
+        raise SystemExit(
+            f"--emit-sample only supports the default output path: {DEFAULT_OUTPUT}"
+        )
+
     payload = sample_graph_payload(args.graph_version)
-    output_path = write_sample_graph(args.output, payload)
+    output_path = write_sample_graph(payload)
     validate_output_size(output_path)
 
     sys.path.insert(0, str(BACKEND_ROOT))
