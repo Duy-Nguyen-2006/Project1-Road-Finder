@@ -28,23 +28,15 @@ INSERT OR IGNORE INTO enum_risk_lane (value) VALUES
     ('normal'),
     ('high_risk');
 
-CREATE TABLE IF NOT EXISTS enum_decision_status (
+CREATE TABLE IF NOT EXISTS enum_record_status (
     value TEXT PRIMARY KEY
 );
-INSERT OR IGNORE INTO enum_decision_status (value) VALUES
+INSERT OR IGNORE INTO enum_record_status (value) VALUES
     ('proposed'),
     ('accepted'),
     ('superseded'),
-    ('rejected');
-
-CREATE TABLE IF NOT EXISTS enum_backlog_status (
-    value TEXT PRIMARY KEY
-);
-INSERT OR IGNORE INTO enum_backlog_status (value) VALUES
-    ('proposed'),
-    ('accepted'),
-    ('implemented'),
-    ('rejected');
+    ('rejected'),
+    ('implemented');
 
 ----------------------------------------------------------------------
 -- Intake: classifying incoming work
@@ -94,8 +86,8 @@ CREATE TABLE decision (
     id                    TEXT PRIMARY KEY,  -- e.g. 0001
     title                 TEXT NOT NULL,
     created_at            TEXT NOT NULL DEFAULT (datetime('now')),
-    status                TEXT NOT NULL DEFAULT 'proposed'
-                          REFERENCES enum_decision_status(value),
+    status                TEXT NOT NULL
+                          REFERENCES enum_record_status(value),
     doc_path              TEXT,              -- path to the markdown ADR
     verify_command        TEXT,              -- optional check command
     last_verified_at      TEXT,
@@ -118,8 +110,8 @@ CREATE TABLE backlog (
     current_pain          TEXT,
     suggested_improvement TEXT,
     risk                  TEXT    REFERENCES enum_risk_lane(value),
-    status                TEXT    NOT NULL DEFAULT 'proposed'
-                          REFERENCES enum_backlog_status(value),
+    status                TEXT    NOT NULL
+                          REFERENCES enum_record_status(value),
     predicted_impact      TEXT,
     actual_outcome        TEXT,
     implemented_at        TEXT,

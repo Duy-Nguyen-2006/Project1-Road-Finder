@@ -15,7 +15,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BACKEND_ROOT = REPO_ROOT / "backend"
-DEFAULT_OUTPUT = REPO_ROOT / "backend" / "app" / "data" / "road_graph.generated.json"
+ALLOWED_OUTPUT_DIR = (REPO_ROOT / "backend" / "app" / "data").resolve()
+DEFAULT_OUTPUT = ALLOWED_OUTPUT_DIR / "road_graph.generated.json"
 MAX_OUTPUT_BYTES = 50 * 1024 * 1024
 
 # Approved offline source expectation (do not download in scaffold dry-run).
@@ -91,13 +92,27 @@ def sample_graph_payload(graph_version: str) -> dict:
 
 
 def resolve_safe_output_path(output: Path) -> Path:
-    resolved = output.expanduser().resolve()
-    repo_root = REPO_ROOT.resolve()
-    if not resolved.is_relative_to(repo_root):
+    filename = output.name
+    if not filename or filename in {".", ".."}:
+        raise SystemExit(f"Invalid output filename: {output}")
+    safe_path = (ALLOWED_OUTPUT_DIR / filename).resolve()
+    if not safe_path.is_relative_to(ALLOWED_OUTPUT_DIR):
         raise SystemExit(
-            f"Output path must stay inside the repository root: {resolved}"
+            f"Output path must stay inside {ALLOWED_OUTPUT_DIR}: {safe_path}"
         )
-    return resolved
+    return safe_path
+
+
+def write_sample_graph(output: Path, payload: dict) -> Path:
+    safe_path = resolve_safe_output_path(output)
+    parent_dir = safe_path.parent.resolve()
+    if not parent_dir.is_relative_to(ALLOWED_OUTPUT_DIR):
+        raise SystemExit(
+            f"Output parent must stay inside {ALLOWED_OUTPUT_DIR}: {parent_dir}"
+        )
+    parent_dir.mkdir(parents=True, exist_ok=True)
+    safe_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return safe_path
 
 
 def validate_output_size(path: Path) -> None:
@@ -142,9 +157,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     payload = sample_graph_payload(args.graph_version)
-    output_path = resolve_safe_output_path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    output_path = write_sample_graph(args.output, payload)
     validate_output_size(output_path)
 
     sys.path.insert(0, str(BACKEND_ROOT))
