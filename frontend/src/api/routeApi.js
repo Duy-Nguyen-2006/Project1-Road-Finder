@@ -3,22 +3,24 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000
 const ACCEPTED_AREA_DETAIL = "Error: Not in accepted area";
 
 async function parseError(response) {
-  let message = "Lỗi không xác định từ backend";
-  try {
-    const body = await response.json();
-    if (body && typeof body.detail === "string") {
-      message = body.detail;
-    } else if (body && body.detail) {
-      message = JSON.stringify(body.detail);
-    }
-  } catch (_err) {
-    try {
-      message = await response.text();
-    } catch (_err2) {
-      // ignore
-    }
+  const body = await parseJsonBody(response);
+  if (typeof body?.detail === "string") {
+    return body.detail;
   }
-  return message;
+  if (body?.detail) {
+    return JSON.stringify(body.detail);
+  }
+  return (await response.text()) || "Lỗi không xác định từ backend";
+}
+
+async function parseJsonBody(response) {
+  const text = await response.clone().text();
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
 }
 
 async function postJson(url, data) {

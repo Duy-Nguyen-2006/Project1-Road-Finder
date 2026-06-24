@@ -54,13 +54,13 @@ def health_check(request: Request) -> dict:
     return build_health_payload(_runtime(request))
 
 
-@router.get("/graph/bounds", response_model=GraphBoundsResponse)
+@router.get("/graph/bounds")
 def graph_bounds(request: Request) -> GraphBoundsResponse:
     payload = build_graph_bounds_payload(_runtime(request))
     return GraphBoundsResponse(**payload)
 
 
-@router.post("/route", response_model=RouteResponse)
+@router.post("/route")
 def route(request: Request, body: RouteRequest) -> RouteResponse:
     options = _to_routing_options(body.options)
     try:
@@ -75,7 +75,7 @@ def route(request: Request, body: RouteRequest) -> RouteResponse:
     )
 
 
-@router.post("/assignments", response_model=AssignmentResponse)
+@router.post("/assignments")
 def assignments(request: Request, body: AssignmentRequest) -> AssignmentResponse:
     runtime = _runtime(request)
     options = _to_routing_options(body.options)
@@ -161,7 +161,7 @@ def assignments(request: Request, body: AssignmentRequest) -> AssignmentResponse
         raise http_exception_for_domain_error(exc) from exc
 
 
-@router.post("/tours", response_model=TourResponse)
+@router.post("/tours")
 def tours(request: Request, body: TourRequest) -> TourResponse:
     runtime = _runtime(request)
     options = _to_routing_options(body.options)
@@ -226,7 +226,7 @@ def tours(request: Request, body: TourRequest) -> TourResponse:
         raise http_exception_for_domain_error(exc) from exc
 
 
-@router.post("/fleet", response_model=FleetResponse)
+@router.post("/fleet")
 def fleet(request: Request, body: FleetRequest) -> FleetResponse:
     runtime = _runtime(request)
     options = _to_routing_options(body.options)

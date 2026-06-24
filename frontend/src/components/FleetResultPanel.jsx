@@ -1,5 +1,9 @@
 import React from "react";
 import { formatDistance } from "../utils/format";
+import {
+  FleetResultPropType,
+  ShipperColorMapPropType,
+} from "./proptypes";
 
 export default function FleetResultPanel({ fleetResult, shipperColorMap }) {
   if (!fleetResult) return null;
@@ -17,7 +21,7 @@ export default function FleetResultPanel({ fleetResult, shipperColorMap }) {
             <div className="shipper-tour-header">
               <span
                 className="shipper-color-dot"
-                style={{ background: shipperColorMap[tour.shipper_id] || "#666" }}
+                style={{ background: shipperColorMap?.[tour.shipper_id] ?? "#666" }}
               />
               <span className="shipper-name">{tour.shipper_id}</span>
               <span className="shipper-distance">
@@ -25,8 +29,11 @@ export default function FleetResultPanel({ fleetResult, shipperColorMap }) {
               </span>
             </div>
             <ul className="stop-list">
-              {tour.ordered_stops.map((stop, i) => (
-                <li key={i} className="stop-item">
+              {tour.ordered_stops.map((stop) => (
+                <li
+                  key={`${tour.shipper_id}-${stop.kind}-${stop.order_id}`}
+                  className="stop-item"
+                >
                   <span className={`stop-badge ${stop.kind}`}>
                     {stop.kind === "pickup" ? "Lấy" : "Giao"}
                   </span>
@@ -53,3 +60,8 @@ export default function FleetResultPanel({ fleetResult, shipperColorMap }) {
     </div>
   );
 }
+
+FleetResultPanel.propTypes = {
+  fleetResult: FleetResultPropType,
+  shipperColorMap: ShipperColorMapPropType,
+};

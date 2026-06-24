@@ -55,10 +55,7 @@ def reconstruct_route_points(
     *,
     clicked_start: tuple[float, float],
     clicked_end: tuple[float, float],
-    start_snap_distance_meters: float,
-    end_snap_distance_meters: float,
     dijkstra_node_ids: list[str],
-    graph_distance_meters: float,
 ) -> list[RouteCoordinate]:
     start_coord = RouteCoordinate(
         latitude=clicked_start[0], longitude=clicked_start[1]
@@ -88,10 +85,7 @@ def reconstruct_route(
         lookup,
         clicked_start=clicked_start,
         clicked_end=clicked_end,
-        start_snap_distance_meters=start_snap_distance_meters,
-        end_snap_distance_meters=end_snap_distance_meters,
         dijkstra_node_ids=dijkstra_node_ids,
-        graph_distance_meters=graph_distance_meters,
     )
     distance_meters = compute_total_distance_meters(
         start_snap_distance_meters,

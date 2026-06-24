@@ -1,4 +1,11 @@
 import React from "react";
+import PropTypes from "prop-types";
+import {
+  CoordPropType,
+  OrderPropType,
+  ShipperColorMapPropType,
+  ShipperPropType,
+} from "./proptypes";
 
 function CoordDisplay({ point }) {
   if (!point) return null;
@@ -8,6 +15,10 @@ function CoordDisplay({ point }) {
     </div>
   );
 }
+
+CoordDisplay.propTypes = {
+  point: CoordPropType,
+};
 
 export default function PointList({
   orders,
@@ -30,7 +41,7 @@ export default function PointList({
           {shippers.map((s) => (
             <div key={s.id} className="point-section">
               <div>
-                <strong style={{ color: shipperColorMap[s.id] || "#333" }}>
+                <strong style={{ color: shipperColorMap?.[s.id] ?? "#333" }}>
                   {s.id}
                 </strong>
                 <CoordDisplay point={s.location} />
@@ -77,3 +88,11 @@ export default function PointList({
     </div>
   );
 }
+
+PointList.propTypes = {
+  orders: PropTypes.arrayOf(OrderPropType).isRequired,
+  shippers: PropTypes.arrayOf(ShipperPropType).isRequired,
+  shipperColorMap: ShipperColorMapPropType,
+  onRemoveOrder: PropTypes.func.isRequired,
+  onRemoveShipper: PropTypes.func.isRequired,
+};

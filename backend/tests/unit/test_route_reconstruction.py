@@ -39,10 +39,7 @@ def test_route_points_begin_with_clicked_start_and_end_with_clicked_end(runtime)
         GraphNodeLookup(runtime.nodes),
         clicked_start=start,
         clicked_end=end,
-        start_snap_distance_meters=start_snap.distance_meters,
-        end_snap_distance_meters=end_snap.distance_meters,
         dijkstra_node_ids=dijkstra.node_ids,
-        graph_distance_meters=dijkstra.graph_distance_meters,
     )
     assert route[0].latitude == pytest.approx(start[0])
     assert route[0].longitude == pytest.approx(start[1])
@@ -62,10 +59,7 @@ def test_intermediate_points_follow_dijkstra_node_order(runtime):
         GraphNodeLookup(runtime.nodes),
         clicked_start=start,
         clicked_end=end,
-        start_snap_distance_meters=start_snap.distance_meters,
-        end_snap_distance_meters=end_snap.distance_meters,
         dijkstra_node_ids=dijkstra.node_ids,
-        graph_distance_meters=dijkstra.graph_distance_meters,
     )
     mid = runtime.nodes["node-mid"]
     assert any(
@@ -89,10 +83,7 @@ def test_exact_endpoint_on_node_dedupes_adjacent_duplicate(runtime):
         GraphNodeLookup(runtime.nodes),
         clicked_start=start,
         clicked_end=end,
-        start_snap_distance_meters=start_snap.distance_meters,
-        end_snap_distance_meters=end_snap.distance_meters,
         dijkstra_node_ids=dijkstra.node_ids,
-        graph_distance_meters=dijkstra.graph_distance_meters,
     )
     assert route[0].latitude == pytest.approx(start[0])
     assert not _has_adjacent_duplicate(route)
@@ -111,10 +102,7 @@ def test_non_identical_snap_segment_preserved_when_offset_from_node(runtime):
         GraphNodeLookup(runtime.nodes),
         clicked_start=start,
         clicked_end=end,
-        start_snap_distance_meters=start_snap.distance_meters,
-        end_snap_distance_meters=end_snap.distance_meters,
         dijkstra_node_ids=dijkstra.node_ids,
-        graph_distance_meters=dijkstra.graph_distance_meters,
     )
     assert len(route) >= 3
     assert route[0].latitude == pytest.approx(start[0])
@@ -157,10 +145,7 @@ def test_same_snapped_node_returns_snap_only_route(runtime):
         GraphNodeLookup(runtime.nodes),
         clicked_start=start,
         clicked_end=end,
-        start_snap_distance_meters=start_snap.distance_meters,
-        end_snap_distance_meters=end_snap.distance_meters,
         dijkstra_node_ids=dijkstra.node_ids,
-        graph_distance_meters=dijkstra.graph_distance_meters,
     )
     assert route[0].latitude == pytest.approx(start[0])
     assert route[-1].latitude == pytest.approx(end[0])
@@ -177,10 +162,7 @@ def test_same_snapped_node_returns_snap_only_route(runtime):
             GraphNodeLookup(runtime.nodes),
             clicked_start=start,
             clicked_end=end,
-            start_snap_distance_meters=start_snap.distance_meters,
-            end_snap_distance_meters=end_snap.distance_meters,
             dijkstra_node_ids=dijkstra.node_ids,
-            graph_distance_meters=dijkstra.graph_distance_meters,
         )
         assert [(p.latitude, p.longitude) for p in again] == [
             (p.latitude, p.longitude) for p in route

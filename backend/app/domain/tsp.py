@@ -71,6 +71,44 @@ def _brute_force_optimal(
     return best_stops, best_dist
 
 
+def _is_dropoff_eligible(
+    stop: Stop,
+    visited_orders: dict[str, set[str]],
+    remaining: list[Stop],
+) -> bool:
+    """Check if a dropoff stop can be visited (pickup already done or no pickup left)."""
+    if stop.kind != "dropoff":
+        return True
+    visited = visited_orders.get(stop.order_id, set())
+    if "pickup" in visited:
+        return True
+    has_pickup_remaining = any(
+        s.order_id == stop.order_id and s.kind == "pickup" for s in remaining
+    )
+    return not has_pickup_remaining
+
+
+def _find_nearest_valid_stop(
+    remaining: list[Stop],
+    current_node: str,
+    visited_orders: dict[str, set[str]],
+    cost_matrix: DistanceProvider,
+) -> int:
+    """Find the index of the nearest valid stop; -1 if none."""
+    best_idx = -1
+    best_dist = float("inf")
+
+    for i, stop in enumerate(remaining):
+        if not _is_dropoff_eligible(stop, visited_orders, remaining):
+            continue
+        dist = cost_matrix.get_distance(current_node, stop.node_id)
+        if dist is not None and dist < best_dist:
+            best_dist = dist
+            best_idx = i
+
+    return best_idx
+
+
 def _nearest_neighbor_heuristic(
     stops: list[Stop],
     cost_matrix: DistanceProvider,
@@ -86,40 +124,17 @@ def _nearest_neighbor_heuristic(
 
     remaining = list(stops)
     result: list[Stop] = []
-    visited_orders: dict[str, set[str]] = {}  # order_id -> set of kinds visited
+    visited_orders: dict[str, set[str]] = {}
 
-    # Determine starting point
-    if start_node:
-        current_node = start_node
-    else:
-        first = remaining.pop(0)
-        result.append(first)
-        visited_orders.setdefault(first.order_id, set()).add(first.kind)
-        current_node = first.node_id
+    current_node = _initialize_start(
+        remaining, result, visited_orders, start_node
+    )
 
     while remaining:
-        best_idx = -1
-        best_dist = float("inf")
-
-        for i, stop in enumerate(remaining):
-            # Check if picking this stop violates precedence
-            visited = visited_orders.get(stop.order_id, set())
-            if stop.kind == "dropoff" and "pickup" not in visited:
-                # Need pickup first - but if no pickup remaining, skip
-                has_pickup_remaining = any(
-                    s.order_id == stop.order_id and s.kind == "pickup"
-                    for s in remaining
-                )
-                if has_pickup_remaining:
-                    continue
-
-            dist = cost_matrix.get_distance(current_node, stop.node_id)
-            if dist is not None and dist < best_dist:
-                best_dist = dist
-                best_idx = i
-
+        best_idx = _find_nearest_valid_stop(
+            remaining, current_node, visited_orders, cost_matrix
+        )
         if best_idx < 0:
-            # No valid next stop found
             return None
 
         chosen = remaining.pop(best_idx)
@@ -128,6 +143,21 @@ def _nearest_neighbor_heuristic(
         current_node = chosen.node_id
 
     return result
+
+
+def _initialize_start(
+    remaining: list[Stop],
+    result: list[Stop],
+    visited_orders: dict[str, set[str]],
+    start_node: str | None,
+) -> str:
+    """Set up the starting point for nearest-neighbor; return current node."""
+    if start_node:
+        return start_node
+    first = remaining.pop(0)
+    result.append(first)
+    visited_orders.setdefault(first.order_id, set()).add(first.kind)
+    return first.node_id
 
 
 def _two_opt_improve(
@@ -139,34 +169,33 @@ def _two_opt_improve(
     if len(stops) < 4:
         return stops
 
-    improved = True
-    iteration = 0
     current = list(stops)
-
     current_dist = _tour_distance(current, cost_matrix)
 
-    while improved and iteration < max_iterations:
-        improved = False
-        iteration += 1
-
-        for i in range(len(current) - 1):
-            for j in range(i + 2, len(current)):
-                candidate = current[:i + 1] + current[i + 1:j + 1][::-1] + current[j + 1:]
-
-                if not _check_precedence(candidate):
-                    continue
-
-                candidate_dist = _tour_distance(candidate, cost_matrix)
-
-                if candidate_dist < current_dist:
-                    current = candidate
-                    current_dist = candidate_dist
-                    improved = True
-                    break
-            if improved:
-                break
+    for _ in range(max_iterations):
+        result = _find_2opt_move(current, current_dist, cost_matrix)
+        if result is None:
+            break
+        current, current_dist = result
 
     return current
+
+
+def _find_2opt_move(
+    current: list[Stop],
+    current_dist: float,
+    cost_matrix: DistanceProvider,
+) -> tuple[list[Stop], float] | None:
+    """Find a single improving 2-opt move; return (new_stops, new_dist) or None."""
+    for i in range(len(current) - 1):
+        for j in range(i + 2, len(current)):
+            candidate = current[:i + 1] + current[i + 1:j + 1][::-1] + current[j + 1:]
+            if not _check_precedence(candidate):
+                continue
+            candidate_dist = _tour_distance(candidate, cost_matrix)
+            if candidate_dist < current_dist:
+                return candidate, candidate_dist
+    return None
 
 
 def optimize_tour(

@@ -1,4 +1,5 @@
 import React from "react";
+import PropTypes from "prop-types";
 
 const ROAD_TYPES = [
   { value: "highway", label: "Đường cao tốc" },
@@ -33,3 +34,8 @@ export default function OptionsPanel({ avoidRoadTypes, onAvoidRoadTypesChange })
     </div>
   );
 }
+
+OptionsPanel.propTypes = {
+  avoidRoadTypes: PropTypes.arrayOf(PropTypes.string).isRequired,
+  onAvoidRoadTypesChange: PropTypes.func.isRequired,
+};

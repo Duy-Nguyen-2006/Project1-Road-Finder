@@ -10,8 +10,15 @@ import {
   useMapEvents,
 } from "react-leaflet";
 import L from "leaflet";
+import PropTypes from "prop-types";
 import { bboxToLeaflet } from "../utils/geo";
-import { PLACEMENT_MODE } from "../hooks/useVrpState";
+import {
+  CoordPropType,
+  FleetResultPropType,
+  OrderPropType,
+  ShipperColorMapPropType,
+  ShipperPropType,
+} from "./proptypes";
 
 // Fix Leaflet default icon issue with Vite/Webpack
 delete L.Icon.Default.prototype._getIconUrl;
@@ -59,6 +66,11 @@ function MapClickHandler({ enabled, onAddPoint }) {
   return null;
 }
 
+MapClickHandler.propTypes = {
+  enabled: PropTypes.bool.isRequired,
+  onAddPoint: PropTypes.func.isRequired,
+};
+
 function MapBoundsFitter({ bounds, tourPolylines }) {
   const map = useMap();
   useEffect(() => {
@@ -79,6 +91,22 @@ function MapBoundsFitter({ bounds, tourPolylines }) {
 
   return null;
 }
+
+MapBoundsFitter.propTypes = {
+  bounds: PropTypes.shape({
+    min_latitude: PropTypes.number,
+    min_longitude: PropTypes.number,
+    max_latitude: PropTypes.number,
+    max_longitude: PropTypes.number,
+  }),
+  tourPolylines: PropTypes.arrayOf(
+    PropTypes.shape({
+      shipperId: PropTypes.string,
+      points: PropTypes.arrayOf(PropTypes.arrayOf(PropTypes.number)),
+      color: PropTypes.string,
+    })
+  ).isRequired,
+};
 
 function MapInvalidator() {
   const map = useMap();
@@ -104,7 +132,7 @@ export default function MapView({
 
   // Build polylines from fleet result
   const tourPolylines = useMemo(() => {
-    if (!fleetResult || !fleetResult.tours) return [];
+    if (!fleetResult?.tours) return [];
     return fleetResult.tours.map((tour) => {
       const points = [];
       for (const leg of tour.legs) {
@@ -115,7 +143,7 @@ export default function MapView({
       return {
         shipperId: tour.shipper_id,
         points,
-        color: shipperColorMap[tour.shipper_id] || "#666",
+        color: shipperColorMap?.[tour.shipper_id] ?? "#666",
       };
     });
   }, [fleetResult, shipperColorMap]);
@@ -200,3 +228,20 @@ export default function MapView({
     </MapContainer>
   );
 }
+
+MapView.propTypes = {
+  bounds: PropTypes.shape({
+    min_latitude: PropTypes.number,
+    min_longitude: PropTypes.number,
+    max_latitude: PropTypes.number,
+    max_longitude: PropTypes.number,
+  }),
+  orders: PropTypes.arrayOf(OrderPropType).isRequired,
+  shippers: PropTypes.arrayOf(ShipperPropType).isRequired,
+  pendingPickup: CoordPropType,
+  fleetResult: FleetResultPropType,
+  shipperColorMap: ShipperColorMapPropType,
+  selectionEnabled: PropTypes.bool.isRequired,
+  onAddPoint: PropTypes.func.isRequired,
+  placementMode: PropTypes.string,
+};

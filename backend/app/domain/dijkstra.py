@@ -30,59 +30,85 @@ def bidirectional_dijkstra(
     if reverse_adjacency is None:
         reverse_adjacency = build_reverse_adjacency(adjacency)
 
-    dist_f: dict[str, float] = {start_node_id: 0.0}
-    dist_b: dict[str, float] = {end_node_id: 0.0}
-    parent_f: dict[str, str | None] = {start_node_id: None}
-    parent_b: dict[str, str | None] = {end_node_id: None}
+    state = _BidirectionalState(start_node_id, end_node_id)
 
-    heap_f: list[tuple[float, str]] = [(0.0, start_node_id)]
-    heap_b: list[tuple[float, str]] = [(0.0, end_node_id)]
-
-    best_total = _INF
-    meeting_node: str | None = None
-
-    while heap_f and heap_b:
-        if heap_f[0][0] + heap_b[0][0] >= best_total:
+    while state.heap_f and state.heap_b:
+        if state.heap_f[0][0] + state.heap_b[0][0] >= state.best_total:
             break
 
-        expand_forward = heap_f[0][0] <= heap_b[0][0]
+        expand_forward = state.heap_f[0][0] <= state.heap_b[0][0]
         if expand_forward:
-            dist_u, u = heapq.heappop(heap_f)
-            if dist_u > dist_f.get(u, _INF):
-                continue
-            for v, weight in adjacency.get(u, []):
-                nd = dist_u + weight
-                _relax(dist_f, parent_f, heap_f, u, v, nd)
-                total = dist_f.get(v, _INF) + dist_b.get(v, _INF)
-                if total < best_total:
-                    best_total = total
-                    meeting_node = v
+            _expand_side(
+                state.heap_f,
+                state.dist_f,
+                state.parent_f,
+                adjacency,
+                state,
+            )
         else:
-            dist_u, u = heapq.heappop(heap_b)
-            if dist_u > dist_b.get(u, _INF):
-                continue
-            for v, weight in reverse_adjacency.get(u, []):
-                nd = dist_u + weight
-                _relax(dist_b, parent_b, heap_b, u, v, nd)
-                total = dist_f.get(v, _INF) + dist_b.get(v, _INF)
-                if total < best_total:
-                    best_total = total
-                    meeting_node = v
+            _expand_side(
+                state.heap_b,
+                state.dist_b,
+                state.parent_b,
+                reverse_adjacency,
+                state,
+            )
 
-    if meeting_node is None or best_total == _INF:
+    if state.meeting_node is None or state.best_total == _INF:
         raise NoRouteError()
 
-    forward_path = _path_to_origin(parent_f, start_node_id, meeting_node)
+    forward_path = _path_to_origin(state.parent_f, start_node_id, state.meeting_node)
     if not forward_path:
         raise NoRouteError()
 
-    suffix = _path_toward_end(parent_b, end_node_id, meeting_node)
+    suffix = _path_toward_end(state.parent_b, end_node_id, state.meeting_node)
     node_ids = forward_path + suffix
 
     return DijkstraResult(
         node_ids=node_ids,
-        graph_distance_meters=best_total,
+        graph_distance_meters=state.best_total,
     )
+
+
+@dataclass
+class _BidirectionalState:
+    dist_f: dict[str, float]
+    dist_b: dict[str, float]
+    parent_f: dict[str, str | None]
+    parent_b: dict[str, str | None]
+    heap_f: list[tuple[float, str]]
+    heap_b: list[tuple[float, str]]
+    best_total: float
+    meeting_node: str | None
+
+    def __init__(self, start: str, end: str) -> None:
+        self.dist_f = {start: 0.0}
+        self.dist_b = {end: 0.0}
+        self.parent_f = {start: None}
+        self.parent_b = {end: None}
+        self.heap_f = [(0.0, start)]
+        self.heap_b = [(0.0, end)]
+        self.best_total = _INF
+        self.meeting_node = None
+
+
+def _expand_side(
+    heap: list[tuple[float, str]],
+    dist: dict[str, float],
+    parent: dict[str, str | None],
+    adjacency: Adjacency,
+    state: _BidirectionalState,
+) -> None:
+    dist_u, u = heapq.heappop(heap)
+    if dist_u > dist.get(u, _INF):
+        return
+    for v, weight in adjacency.get(u, []):
+        nd = dist_u + weight
+        _relax(dist, parent, heap, u, v, nd)
+        total = state.dist_f.get(v, _INF) + state.dist_b.get(v, _INF)
+        if total < state.best_total:
+            state.best_total = total
+            state.meeting_node = v
 
 
 def _relax(

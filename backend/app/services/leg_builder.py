@@ -22,10 +22,7 @@ def leg_route_points_and_distance(
         lookup,
         clicked_start=clicked_start,
         clicked_end=clicked_end,
-        start_snap_distance_meters=start_snap_distance_meters,
-        end_snap_distance_meters=end_snap_distance_meters,
         dijkstra_node_ids=path_node_ids,
-        graph_distance_meters=graph_distance_meters,
     )
     distance = compute_total_distance_meters(
         start_snap_distance_meters,

@@ -36,3 +36,4 @@ backend/cache/
 .factory/
 .claude/
 droid-wiki/
+.sonar-token

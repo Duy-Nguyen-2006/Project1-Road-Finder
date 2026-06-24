@@ -1,4 +1,5 @@
 import React from "react";
+import PropTypes from "prop-types";
 import { PLACEMENT_MODE, ORDER_STEP } from "../hooks/useVrpState";
 
 const MODE_LABELS = {
@@ -44,3 +45,9 @@ export default function ModeSwitcher({
     </div>
   );
 }
+
+ModeSwitcher.propTypes = {
+  placementMode: PropTypes.oneOf(Object.values(PLACEMENT_MODE)).isRequired,
+  onPlacementModeChange: PropTypes.func.isRequired,
+  orderStep: PropTypes.oneOf(Object.values(ORDER_STEP)).isRequired,
+};

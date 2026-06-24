@@ -27,41 +27,101 @@ class GridSpatialIndex:
         best_dist = math.inf
         seen_cells: set[tuple[int, int]] = set()
 
+        best_id, best_dist = self._search_rings(
+            latitude, longitude, center, seen_cells, best_id, best_dist
+        )
+
+        if not best_id:
+            best_id, best_dist = self._search_all_nodes(
+                latitude, longitude, best_id, best_dist
+            )
+        return best_id
+
+    def _search_rings(
+        self,
+        latitude: float,
+        longitude: float,
+        center: tuple[int, int],
+        seen_cells: set[tuple[int, int]],
+        best_id: str,
+        best_dist: float,
+    ) -> tuple[str, float]:
+        """Search concentric rings until the nearest node is confirmed."""
         for ring in range(max(GRID_ROWS, GRID_COLS) + 1):
-            for cell in self._cells_in_ring(center, ring):
-                if cell in seen_cells:
-                    continue
-                seen_cells.add(cell)
-                for node_id in self._buckets.get(cell, []):
-                    node = self._nodes[node_id]
-                    dist = haversine_meters(
-                        latitude,
-                        longitude,
-                        node.latitude,
-                        node.longitude,
-                    )
-                    if dist < best_dist or (
-                        math.isclose(dist, best_dist) and node_id < best_id
-                    ):
-                        best_dist = dist
-                        best_id = node_id
+            best_id, best_dist = self._search_ring(
+                latitude, longitude, center, ring, seen_cells, best_id, best_dist
+            )
 
             if best_id and best_dist <= self._min_distance_to_unsearched(
                 latitude, longitude, seen_cells
             ):
-                return best_id
+                return best_id, best_dist
+        return best_id, best_dist
 
-        if not best_id:
-            for node_id, node in sorted(self._nodes.items()):
-                dist = haversine_meters(
-                    latitude, longitude, node.latitude, node.longitude
-                )
-                if dist < best_dist or (
-                    math.isclose(dist, best_dist) and node_id < best_id
-                ):
-                    best_dist = dist
-                    best_id = node_id
-        return best_id
+    def _search_ring(
+        self,
+        latitude: float,
+        longitude: float,
+        center: tuple[int, int],
+        ring: int,
+        seen_cells: set[tuple[int, int]],
+        best_id: str,
+        best_dist: float,
+    ) -> tuple[str, float]:
+        """Search a single ring; update and return best result."""
+        for cell in self._cells_in_ring(center, ring):
+            if cell in seen_cells:
+                continue
+            seen_cells.add(cell)
+            best_id, best_dist = self._eval_cell(
+                latitude, longitude, cell, best_id, best_dist
+            )
+        return best_id, best_dist
+
+    def _eval_cell(
+        self,
+        latitude: float,
+        longitude: float,
+        cell: tuple[int, int],
+        best_id: str,
+        best_dist: float,
+    ) -> tuple[str, float]:
+        """Evaluate all nodes in a cell; return updated best."""
+        for node_id in self._buckets.get(cell, []):
+            node = self._nodes[node_id]
+            dist = haversine_meters(
+                latitude, longitude, node.latitude, node.longitude
+            )
+            if self._is_closer(dist, best_dist, node_id, best_id):
+                best_dist = dist
+                best_id = node_id
+        return best_id, best_dist
+
+    @staticmethod
+    def _is_closer(
+        dist: float, best_dist: float, node_id: str, best_id: str
+    ) -> bool:
+        """Check whether node_id is closer (or lexicographically smaller on tie)."""
+        return dist < best_dist or (
+            math.isclose(dist, best_dist) and node_id < best_id
+        )
+
+    def _search_all_nodes(
+        self,
+        latitude: float,
+        longitude: float,
+        best_id: str,
+        best_dist: float,
+    ) -> tuple[str, float]:
+        """Fallback: search every node in the index."""
+        for node_id, node in sorted(self._nodes.items()):
+            dist = haversine_meters(
+                latitude, longitude, node.latitude, node.longitude
+            )
+            if self._is_closer(dist, best_dist, node_id, best_id):
+                best_dist = dist
+                best_id = node_id
+        return best_id, best_dist
 
     def _cell_for(self, latitude: float, longitude: float) -> tuple[int, int]:
         row = self._row_index(latitude)
