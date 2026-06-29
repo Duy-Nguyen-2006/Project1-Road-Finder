@@ -5,8 +5,9 @@
 # SonarQube local scan output
 .scannerwork/
 
-# Road graph data (download separately, not source)
-backend/app/data/*.json
+# Road graph data (dev copies only; production graph is tracked for Vercel)
+backend/app/data/*
+!backend/app/data/road_graph.hcm-v2-uw.json
 
 # Dependencies
 node_modules/

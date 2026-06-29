@@ -5,7 +5,8 @@
   "installCommand": "cd frontend && npm install",
   "framework": null,
   "rewrites": [
-    { "source": "/auth/:path*", "destination": "/api" },
+    { "source": "/auth/session", "destination": "/api" },
+    { "source": "/auth/me", "destination": "/api" },
     { "source": "/health", "destination": "/api" },
     { "source": "/graph/:path*", "destination": "/api" },
     { "source": "/route", "destination": "/api" },

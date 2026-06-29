@@ -17,4 +17,12 @@ from app.application.graph_runtime import build_graph_runtime
 from app.main import create_app
 
 app = create_app()
-app.state.graph_runtime = build_graph_runtime(Path(os.environ["ROAD_FINDER_GRAPH_PATH"]))
+
+_graph_path = Path(os.environ["ROAD_FINDER_GRAPH_PATH"])
+if not _graph_path.is_file():
+    raise FileNotFoundError(
+        f"Road graph not found at {_graph_path}. "
+        "Ensure backend/app/data/road_graph.hcm-v2-uw.json is deployed."
+    )
+
+app.state.graph_runtime = build_graph_runtime(_graph_path)
