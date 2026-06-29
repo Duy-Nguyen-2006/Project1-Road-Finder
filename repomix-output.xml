@@ -33,7 +33,7 @@ The content is organized as follows:
 - Some files may have been excluded based on .gitignore rules and Repomix's configuration
 - Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
 - Only files matching these patterns are included: backend/app/**/*.py, backend/tests/**/*.py, backend/requirements.txt, frontend/src/**/*, frontend/package.json, frontend/package-lock.json, frontend/vite.config.js, frontend/index.html, api/**/*, vercel.json, .vercelignore
-- Files matching these patterns are excluded: .archive/**, docs/**, **/*.md, backend/coverage.xml, scripts/**, .gitnexus/**, harness.db*, **/__pycache__/**, **/.pytest_cache/**, repomix-output.xml
+- Files matching these patterns are excluded: .archive/**, docs/**, **/*.md, backend/coverage.xml, scripts/**, .gitnexus/**, harness.db*, **/__pycache__/**, **/.pytest_cache/**
 - Files matching patterns in .gitignore are excluded
 - Files matching default ignore patterns are excluded
 - Files are sorted by Git change count (files with more changes are at the bottom)
@@ -140,6 +140,108 @@ vercel.json
 <files>
 This section contains the contents of the repository's files.
 
+<file path="api/index.py">
+"""Vercel serverless entry for the FastAPI backend."""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+BACKEND_ROOT = ROOT / "backend"
+GRAPH_PATH = BACKEND_ROOT / "app" / "data" / "road_graph.hcm-v2-uw.json"
+
+sys.path.insert(0, str(BACKEND_ROOT))
+os.environ.setdefault("ROAD_FINDER_GRAPH_PATH", str(GRAPH_PATH))
+
+from app.application.graph_runtime import build_graph_runtime
+from app.main import create_app
+
+app = create_app()
+app.state.graph_runtime = build_graph_runtime(Path(os.environ["ROAD_FINDER_GRAPH_PATH"]))
+</file>
+
+<file path="backend/app/application/graph_bounds.py">
+from __future__ import annotations
+
+from typing import Any
+
+from app.application.graph_runtime import GraphRuntime
+
+
+def build_graph_bounds_payload(runtime: GraphRuntime) -> dict[str, Any]:
+    bbox = runtime.metadata.bbox
+    return {
+        "bbox": {
+            "min_latitude": bbox.min_latitude,
+            "min_longitude": bbox.min_longitude,
+            "max_latitude": bbox.max_latitude,
+            "max_longitude": bbox.max_longitude,
+        },
+        "max_snap_distance_meters": runtime.metadata.max_snap_distance_meters,
+        "graph_version": runtime.metadata.graph_version,
+    }
+</file>
+
+<file path="backend/app/application/health.py">
+from __future__ import annotations
+
+from typing import Any
+
+from app.application.graph_runtime import GraphRuntime
+
+
+def build_health_payload(runtime: GraphRuntime) -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "graph": {
+            "loaded": True,
+            "graph_version": runtime.metadata.graph_version,
+            "node_count": runtime.node_count,
+            "edge_count": runtime.edge_count,
+        },
+        "cache": {
+            "route_cache_size": runtime.route_cache.size,
+            "route_cache_limit": runtime.route_cache.limit,
+        },
+    }
+</file>
+
+<file path="backend/app/application/node_lookup.py">
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from app.domain.graph_types import GraphNode
+
+
+@dataclass(frozen=True)
+class GraphNodeLookup:
+    nodes: dict[str, GraphNode]
+
+    def node_coordinate(self, node_id: str) -> tuple[float, float]:
+        node = self.nodes[node_id]
+        return (node.latitude, node.longitude)
+</file>
+
+<file path="backend/app/domain/protocols.py">
+from __future__ import annotations
+
+from typing import Protocol
+
+
+class DistanceProvider(Protocol):
+    def get_distance(self, src_node: str, dst_node: str) -> float | None: ...
+
+    def get_path(self, src_node: str, dst_node: str) -> list[str] | None: ...
+
+
+class NodeCoordinateLookup(Protocol):
+    def node_coordinate(self, node_id: str) -> tuple[float, float]: ...
+</file>
+
 <file path="backend/app/domain/two_opt.py">
 from __future__ import annotations
 
@@ -197,6 +299,69 @@ def two_opt_improve(
         iteration += 1
 
     return current
+</file>
+
+<file path="backend/app/utils/__init__.py">
+# Empty file to make utils a Python package
+</file>
+
+<file path="backend/tests/unit/test_cost_model.py">
+import pytest
+
+from app.domain.cost_model import RoutingOptions, edge_cost
+
+
+def test_edge_cost_default_multiplier():
+    options = RoutingOptions()
+    assert edge_cost(100.0, "default", options) == pytest.approx(100.0)
+
+
+def test_edge_cost_highway_multiplier():
+    options = RoutingOptions()
+    assert edge_cost(100.0, "highway", options) == pytest.approx(80.0)
+
+
+def test_edge_cost_residential_multiplier():
+    options = RoutingOptions()
+    assert edge_cost(100.0, "residential", options) == pytest.approx(120.0)
+
+
+def test_edge_cost_tertiary_multiplier():
+    options = RoutingOptions()
+    assert edge_cost(100.0, "tertiary", options) == pytest.approx(110.0)
+
+
+def test_edge_cost_primary_multiplier():
+    options = RoutingOptions()
+    assert edge_cost(100.0, "primary", options) == pytest.approx(90.0)
+
+
+def test_edge_cost_unknown_road_type_uses_default():
+    options = RoutingOptions()
+    assert edge_cost(100.0, "unknown_type", options) == pytest.approx(100.0)
+
+
+def test_edge_cost_avoid_road_type_returns_inf():
+    options = RoutingOptions(avoid_road_types=("residential",))
+    assert edge_cost(100.0, "residential", options) == float("inf")
+
+
+def test_edge_cost_avoid_does_not_affect_other_types():
+    options = RoutingOptions(avoid_road_types=("residential",))
+    assert edge_cost(100.0, "highway", options) == pytest.approx(80.0)
+
+
+def test_edge_cost_multiple_avoided_types():
+    options = RoutingOptions(avoid_road_types=("residential", "tertiary"))
+    assert edge_cost(100.0, "residential", options) == float("inf")
+    assert edge_cost(100.0, "tertiary", options) == float("inf")
+    assert edge_cost(100.0, "highway", options) == pytest.approx(80.0)
+
+
+def test_routing_options_defaults():
+    options = RoutingOptions()
+    assert options.avoid_road_types == ()
+    assert options.avoid_edge_ids == ()
 </file>
 
 <file path="backend/tests/unit/test_review_fixes.py">
@@ -291,356 +456,6 @@ def test_route_cache_is_thread_safe_under_concurrent_access():
         thread.join()
 
     assert cache.size <= cache.limit
-</file>
-
-<file path="api/index.py">
-"""Vercel serverless entry for the FastAPI backend."""
-
-from __future__ import annotations
-
-import os
-import sys
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parent.parent
-BACKEND_ROOT = ROOT / "backend"
-GRAPH_PATH = BACKEND_ROOT / "app" / "data" / "road_graph.hcm-v2-uw.json"
-
-sys.path.insert(0, str(BACKEND_ROOT))
-os.environ.setdefault("ROAD_FINDER_GRAPH_PATH", str(GRAPH_PATH))
-
-from app.application.graph_runtime import build_graph_runtime
-from app.main import create_app
-
-app = create_app()
-app.state.graph_runtime = build_graph_runtime(Path(os.environ["ROAD_FINDER_GRAPH_PATH"]))
-</file>
-
-<file path="api/requirements.txt">
-fastapi>=0.110
-pydantic>=2
-</file>
-
-<file path="backend/app/application/graph_bounds.py">
-from __future__ import annotations
-
-from typing import Any
-
-from app.application.graph_runtime import GraphRuntime
-
-
-def build_graph_bounds_payload(runtime: GraphRuntime) -> dict[str, Any]:
-    bbox = runtime.metadata.bbox
-    return {
-        "bbox": {
-            "min_latitude": bbox.min_latitude,
-            "min_longitude": bbox.min_longitude,
-            "max_latitude": bbox.max_latitude,
-            "max_longitude": bbox.max_longitude,
-        },
-        "max_snap_distance_meters": runtime.metadata.max_snap_distance_meters,
-        "graph_version": runtime.metadata.graph_version,
-    }
-</file>
-
-<file path="backend/app/application/health.py">
-from __future__ import annotations
-
-from typing import Any
-
-from app.application.graph_runtime import GraphRuntime
-
-
-def build_health_payload(runtime: GraphRuntime) -> dict[str, Any]:
-    return {
-        "status": "ok",
-        "graph": {
-            "loaded": True,
-            "graph_version": runtime.metadata.graph_version,
-            "node_count": runtime.node_count,
-            "edge_count": runtime.edge_count,
-        },
-        "cache": {
-            "route_cache_size": runtime.route_cache.size,
-            "route_cache_limit": runtime.route_cache.limit,
-        },
-    }
-</file>
-
-<file path="backend/app/application/node_lookup.py">
-from __future__ import annotations
-
-from dataclasses import dataclass
-
-from app.domain.graph_types import GraphNode
-
-
-@dataclass(frozen=True)
-class GraphNodeLookup:
-    nodes: dict[str, GraphNode]
-
-    def node_coordinate(self, node_id: str) -> tuple[float, float]:
-        node = self.nodes[node_id]
-        return (node.latitude, node.longitude)
-</file>
-
-<file path="backend/app/domain/graph_types.py">
-from __future__ import annotations
-
-from dataclasses import dataclass
-
-
-@dataclass(frozen=True)
-class GraphBBox:
-    min_latitude: float
-    min_longitude: float
-    max_latitude: float
-    max_longitude: float
-
-
-@dataclass(frozen=True)
-class GraphMetadata:
-    graph_version: str
-    bbox: GraphBBox
-    # Informational; snap_service no longer rejects clicks beyond this distance.
-    max_snap_distance_meters: float
-
-
-@dataclass(frozen=True)
-class GraphNode:
-    latitude: float
-    longitude: float
-
-
-@dataclass(frozen=True)
-class GraphEdge:
-    from_node: str
-    to_node: str
-    distance: float
-    oneway: bool = False
-    road_type: str = "default"
-
-
-@dataclass(frozen=True)
-class ValidatedGraph:
-    metadata: GraphMetadata
-    nodes: dict[str, GraphNode]
-    edges: list[GraphEdge]
-</file>
-
-<file path="backend/app/domain/protocols.py">
-from __future__ import annotations
-
-from typing import Protocol
-
-
-class DistanceProvider(Protocol):
-    def get_distance(self, src_node: str, dst_node: str) -> float | None: ...
-
-    def get_path(self, src_node: str, dst_node: str) -> list[str] | None: ...
-
-
-class NodeCoordinateLookup(Protocol):
-    def node_coordinate(self, node_id: str) -> tuple[float, float]: ...
-</file>
-
-<file path="backend/app/utils/__init__.py">
-# Empty file to make utils a Python package
-</file>
-
-<file path="backend/tests/unit/test_assignment_tour.py">
-import json
-from pathlib import Path
-
-import pytest
-
-from app.application.cost_matrix import CostMatrix
-from app.application.graph_runtime import build_graph_runtime
-from app.domain.assignment import rank_shippers_for_order
-from app.domain.tsp import Stop, optimize_tour
-
-FIXTURE_GRAPH_PATH = (
-    Path(__file__).resolve().parents[2] / "app" / "data" / "road_graph.json"
-)
-
-
-@pytest.fixture
-def runtime():
-    return build_graph_runtime(FIXTURE_GRAPH_PATH)
-
-
-@pytest.fixture
-def cost_matrix(runtime):
-    cm = CostMatrix(runtime)
-    # All nodes in fixture
-    all_nodes = list(runtime.nodes.keys())
-    cm.compute_for_nodes(all_nodes)
-    return cm
-
-
-def test_cost_matrix_self_distance_is_zero(cost_matrix):
-    for node_id in ["node-start", "node-mid", "node-end"]:
-        assert cost_matrix.get_distance(node_id, node_id) == pytest.approx(0.0)
-
-
-def test_cost_matrix_symmetric_for_bidirectional_edges(cost_matrix):
-    dist_forward = cost_matrix.get_distance("node-start", "node-mid")
-    dist_reverse = cost_matrix.get_distance("node-mid", "node-start")
-    assert dist_forward == pytest.approx(dist_reverse)
-
-
-def test_cost_matrix_path_exists(cost_matrix):
-    path = cost_matrix.get_path("node-start", "node-end")
-    assert path is not None
-    assert len(path) >= 2
-    assert path[0] == "node-start"
-    assert path[-1] == "node-end"
-
-
-def test_assignment_ranks_shippers_by_distance(cost_matrix):
-    # 2 shippers at different locations
-    shipper_ids = ["s1", "s2"]
-    shipper_nodes = {
-        "s1": "node-start",
-        "s2": "node-mid",
-    }
-    pickup_node = "node-north"
-    dropoff_node = "node-end"
-
-    result = rank_shippers_for_order(
-        shipper_ids, shipper_nodes, pickup_node, dropoff_node, cost_matrix
-    )
-
-    assert result.recommended_shipper_id is not None
-    assert len(result.ranking) == 2
-    # All should be feasible
-    assert all(r.feasible for r in result.ranking)
-    # Should be sorted by distance
-    assert result.ranking[0].total_distance_meters <= result.ranking[1].total_distance_meters
-
-
-def test_assignment_recommends_closest_shipper(cost_matrix):
-    shipper_ids = ["s1", "s2"]
-    shipper_nodes = {
-        "s1": "node-start",  # closer to pickup
-        "s2": "node-end",    # farther
-    }
-    pickup_node = "node-mid"
-    dropoff_node = "node-end"
-
-    result = rank_shippers_for_order(
-        shipper_ids, shipper_nodes, pickup_node, dropoff_node, cost_matrix
-    )
-
-    # s1 (node-start) is closer to node-mid than s2 (node-end)
-    assert result.recommended_shipper_id == "s1"
-
-
-def test_tour_optimal_for_two_orders(cost_matrix):
-    stops = [
-        Stop(order_id="o1", kind="pickup", node_id="node-start"),
-        Stop(order_id="o1", kind="dropoff", node_id="node-mid"),
-        Stop(order_id="o2", kind="pickup", node_id="node-north"),
-        Stop(order_id="o2", kind="dropoff", node_id="node-end"),
-    ]
-
-    tour = optimize_tour("node-start", stops, cost_matrix)
-
-    assert tour.feasible is True
-    assert tour.total_distance_meters > 0
-    assert len(tour.ordered_stops) == 4
-
-    # Check precedence: pickup before dropoff for each order
-    seen = {}
-    for stop in tour.ordered_stops:
-        if stop.order_id not in seen:
-            seen[stop.order_id] = []
-        seen[stop.order_id].append(stop.kind)
-
-    for order_id, kinds in seen.items():
-        pickup_idx = kinds.index("pickup")
-        dropoff_idx = kinds.index("dropoff")
-        assert pickup_idx < dropoff_idx
-
-
-def test_tour_empty_stops(cost_matrix):
-    tour = optimize_tour("node-start", [], cost_matrix)
-    assert tour.total_distance_meters == pytest.approx(0.0)
-    assert tour.optimal is True
-
-
-def test_tour_single_order(cost_matrix):
-    stops = [
-        Stop(order_id="o1", kind="pickup", node_id="node-mid"),
-        Stop(order_id="o1", kind="dropoff", node_id="node-end"),
-    ]
-
-    tour = optimize_tour("node-start", stops, cost_matrix)
-
-    assert tour.feasible is True
-    assert tour.total_distance_meters > 0
-    assert len(tour.ordered_stops) == 2
-    assert tour.ordered_stops[0].kind == "pickup"
-    assert tour.ordered_stops[1].kind == "dropoff"
-</file>
-
-<file path="backend/tests/unit/test_cost_model.py">
-import pytest
-
-from app.domain.cost_model import RoutingOptions, edge_cost
-
-
-def test_edge_cost_default_multiplier():
-    options = RoutingOptions()
-    assert edge_cost(100.0, "default", options) == pytest.approx(100.0)
-
-
-def test_edge_cost_highway_multiplier():
-    options = RoutingOptions()
-    assert edge_cost(100.0, "highway", options) == pytest.approx(80.0)
-
-
-def test_edge_cost_residential_multiplier():
-    options = RoutingOptions()
-    assert edge_cost(100.0, "residential", options) == pytest.approx(120.0)
-
-
-def test_edge_cost_tertiary_multiplier():
-    options = RoutingOptions()
-    assert edge_cost(100.0, "tertiary", options) == pytest.approx(110.0)
-
-
-def test_edge_cost_primary_multiplier():
-    options = RoutingOptions()
-    assert edge_cost(100.0, "primary", options) == pytest.approx(90.0)
-
-
-def test_edge_cost_unknown_road_type_uses_default():
-    options = RoutingOptions()
-    assert edge_cost(100.0, "unknown_type", options) == pytest.approx(100.0)
-
-
-def test_edge_cost_avoid_road_type_returns_inf():
-    options = RoutingOptions(avoid_road_types=("residential",))
-    assert edge_cost(100.0, "residential", options) == float("inf")
-
-
-def test_edge_cost_avoid_does_not_affect_other_types():
-    options = RoutingOptions(avoid_road_types=("residential",))
-    assert edge_cost(100.0, "highway", options) == pytest.approx(80.0)
-
-
-def test_edge_cost_multiple_avoided_types():
-    options = RoutingOptions(avoid_road_types=("residential", "tertiary"))
-    assert edge_cost(100.0, "residential", options) == float("inf")
-    assert edge_cost(100.0, "tertiary", options) == float("inf")
-    assert edge_cost(100.0, "highway", options) == pytest.approx(80.0)
-
-
-def test_routing_options_defaults():
-    options = RoutingOptions()
-    assert options.avoid_road_types == ()
-    assert options.avoid_edge_ids == ()
 </file>
 
 <file path="backend/tests/unit/test_routing_options_thresholds.py">
@@ -751,7 +566,15 @@ import pytest
 
 from app.application.cost_matrix import CostMatrix
 from app.application.graph_runtime import build_graph_runtime
-from app.domain.vrp import FleetPlan, solve_vrp
+from app.domain.cost_model import RoutingOptions
+from app.domain.tsp import Stop
+from app.domain.vrp import (
+    FleetPlan,
+    _find_cheapest_insertion_in_tour,
+    _inter_route_relocate,
+    _try_relocate_order,
+    solve_vrp,
+)
 
 FIXTURE_GRAPH_PATH = (
     Path(__file__).resolve().parents[2] / "app" / "data" / "road_graph.json"
@@ -859,6 +682,106 @@ def test_vrp_small_instance_brute_force(cost_matrix):
     # Should be optimal since we used brute-force
     assert result.optimal is True
     assert result.total_distance_meters > 0
+
+
+def test_cheapest_insertion_into_nonempty_destination_tour(cost_matrix):
+    dst_stops = [
+        Stop(order_id="o3", kind="pickup", node_id="node-start"),
+        Stop(order_id="o3", kind="dropoff", node_id="node-mid"),
+    ]
+    pickup = Stop(order_id="o2", kind="pickup", node_id="node-north")
+    dropoff = Stop(order_id="o2", kind="dropoff", node_id="node-south")
+
+    inserted = _find_cheapest_insertion_in_tour(
+        dst_stops,
+        pickup,
+        dropoff,
+        "node-north",
+        cost_matrix,
+    )
+
+    assert inserted is not None
+    order_ids = {stop.order_id for stop in inserted}
+    assert order_ids == {"o2", "o3"}
+
+
+def test_try_relocate_order_preserves_destination_orders(cost_matrix):
+    src_stops = [
+        Stop(order_id="o1", kind="pickup", node_id="node-mid"),
+        Stop(order_id="o1", kind="dropoff", node_id="node-end"),
+        Stop(order_id="o2", kind="pickup", node_id="node-north"),
+        Stop(order_id="o2", kind="dropoff", node_id="node-south"),
+    ]
+    dst_stops = [
+        Stop(order_id="o3", kind="pickup", node_id="node-start"),
+        Stop(order_id="o3", kind="dropoff", node_id="node-mid"),
+    ]
+    shipper_nodes = {"s1": "node-start", "s2": "node-north"}
+
+    result = _try_relocate_order(
+        "s1",
+        "s2",
+        "o2",
+        src_stops,
+        pickup_idx=2,
+        dropoff_idx=3,
+        dst_stops=dst_stops,
+        shipper_nodes=shipper_nodes,
+        cost_matrix=cost_matrix,
+    )
+
+    assert result is not None
+    new_src, new_dst, _ = result
+    assert {stop.order_id for stop in new_src} == {"o1"}
+    assert {stop.order_id for stop in new_dst} == {"o2", "o3"}
+
+
+def test_inter_route_relocate_keeps_all_assigned_orders(cost_matrix):
+    tours = {
+        "s1": [
+            Stop(order_id="o1", kind="pickup", node_id="node-mid"),
+            Stop(order_id="o1", kind="dropoff", node_id="node-end"),
+            Stop(order_id="o2", kind="pickup", node_id="node-north"),
+            Stop(order_id="o2", kind="dropoff", node_id="node-south"),
+        ],
+        "s2": [
+            Stop(order_id="o3", kind="pickup", node_id="node-start"),
+            Stop(order_id="o3", kind="dropoff", node_id="node-mid"),
+        ],
+    }
+    shipper_nodes = {"s1": "node-start", "s2": "node-north"}
+
+    relocated = _inter_route_relocate(tours, shipper_nodes, cost_matrix)
+
+    served = {
+        stop.order_id
+        for stops in relocated.values()
+        for stop in stops
+    }
+    assert served == {"o1", "o2", "o3"}
+
+
+def test_heuristic_vrp_serves_all_orders_with_multiple_shippers(cost_matrix):
+    options = RoutingOptions(vrp_brute_force_max_orders=0, vrp_brute_force_max_shippers=0)
+    result = solve_vrp(
+        shipper_ids=["s1", "s2"],
+        shipper_nodes={"s1": "node-start", "s2": "node-north"},
+        orders=[
+            ("o1", "node-mid", "node-end"),
+            ("o2", "node-north", "node-south"),
+            ("o3", "node-start", "node-mid"),
+        ],
+        cost_matrix=cost_matrix,
+        options=options,
+    )
+
+    served = {
+        stop.order_id
+        for _, tour in result.tours
+        for stop in tour.ordered_stops
+    }
+    assert served == {"o1", "o2", "o3"}
+    assert result.unassigned_order_ids == []
 </file>
 
 <file path="frontend/src/components/ShipperAssignmentPanel.jsx">
@@ -1245,100 +1168,9 @@ droid-wiki
 }
 </file>
 
-<file path="backend/app/application/cost_matrix.py">
-from __future__ import annotations
-
-from dataclasses import dataclass
-
-from app.application.graph_runtime import GraphRuntime, _options_hash
-from app.domain.cost_model import RoutingOptions
-from app.domain.dijkstra import bidirectional_dijkstra
-from app.domain.errors import NoRouteError
-from app.application.snap_service import snap_point
-from app.infrastructure.route_cache import CachedGraphPath
-
-
-@dataclass(frozen=True)
-class CostMatrixEntry:
-    distance_meters: float
-    path_node_ids: tuple[str, ...]
-
-
-class CostMatrix:
-    """Many-to-many distance matrix using Dijkstra from each source.
-
-    Caches results by (graph_version, options_hash, src_node, dst_node).
-    Pair lookups compute on demand when not yet precomputed.
-    """
-
-    def __init__(self, runtime: GraphRuntime, options: RoutingOptions | None = None):
-        if options is None:
-            options = RoutingOptions()
-        self._runtime = runtime
-        self._options = options
-        self._opts_hash = _options_hash(options)
-        self._entries: dict[tuple[str, str], CostMatrixEntry] = {}
-
-    def get_distance(self, src_node: str, dst_node: str) -> float | None:
-        entry = self._get_entry(src_node, dst_node)
-        return entry.distance_meters
-
-    def get_path(self, src_node: str, dst_node: str) -> list[str] | None:
-        entry = self._get_entry(src_node, dst_node)
-        return list(entry.path_node_ids)
-
-    def _get_entry(self, src_node: str, dst_node: str) -> CostMatrixEntry:
-        key = (src_node, dst_node)
-        if key not in self._entries:
-            self._entries[key] = self._compute_pair(src_node, dst_node)
-        return self._entries[key]
-
-    def _compute_pair(self, src_node: str, dst_node: str) -> CostMatrixEntry:
-        if src_node == dst_node:
-            return CostMatrixEntry(distance_meters=0.0, path_node_ids=(src_node,))
-
-        version = self._runtime.metadata.graph_version
-        cache = self._runtime.route_cache
-        cached = cache.get(version, self._opts_hash, src_node, dst_node)
-        if cached is not None:
-            return CostMatrixEntry(
-                distance_meters=cached.graph_distance_meters,
-                path_node_ids=tuple(cached.node_ids),
-            )
-
-        adjacency = self._runtime.adjacency_for(self._options)
-        reverse_adjacency = self._runtime.reverse_adjacency_for(self._options)
-        try:
-            result = bidirectional_dijkstra(
-                adjacency, src_node, dst_node, reverse_adjacency=reverse_adjacency
-            )
-            path = CachedGraphPath(
-                node_ids=list(result.node_ids),
-                graph_distance_meters=result.graph_distance_meters,
-            )
-            cache.put(version, self._opts_hash, src_node, dst_node, path)
-            return CostMatrixEntry(
-                distance_meters=result.graph_distance_meters,
-                path_node_ids=tuple(result.node_ids),
-            )
-        except NoRouteError:
-            return CostMatrixEntry(distance_meters=float("inf"), path_node_ids=())
-
-    def compute_for_nodes(self, node_ids: list[str]) -> None:
-        """Pre-compute distances between all pairs of given nodes."""
-        for src in node_ids:
-            for dst in node_ids:
-                self._get_entry(src, dst)
-
-    def snap_points(
-        self, coordinates: list[tuple[float, float]]
-    ) -> list[str]:
-        """Snap coordinates to node IDs, returning list of node IDs."""
-        node_ids = []
-        for lat, lon in coordinates:
-            snap = snap_point(self._runtime, lat, lon)
-            node_ids.append(snap.node_id)
-        return node_ids
+<file path="api/requirements.txt">
+fastapi>=0.110
+pydantic>=2
 </file>
 
 <file path="backend/app/application/snap_service.py">
@@ -1393,129 +1225,6 @@ def snap_point(
     )
 
     return SnapResult(node_id=node_id, distance_meters=distance_meters)
-</file>
-
-<file path="backend/app/domain/assignment.py">
-from __future__ import annotations
-
-from dataclasses import dataclass
-
-from app.domain.protocols import DistanceProvider
-
-
-@dataclass(frozen=True)
-class AssignmentSnapContext:
-    shipper_snap_distances: dict[str, float]
-    pickup_snap_distance: float
-    dropoff_snap_distance: float
-
-
-@dataclass(frozen=True)
-class ShipperRoute:
-    shipper_id: str
-    legs: list[tuple[str, list[str], float]]  # (kind, path_node_ids, distance)
-    total_distance_meters: float
-    feasible: bool
-
-
-@dataclass(frozen=True)
-class AssignmentResult:
-    recommended_shipper_id: str | None
-    ranking: list[ShipperRoute]
-
-
-def _assignment_total_distance(
-    shipper_id: str,
-    graph_total: float,
-    dist_to_pickup: float,
-    dist_pickup_to_dropoff: float,
-    snap_context: AssignmentSnapContext | None,
-) -> float:
-    if snap_context is None:
-        return graph_total
-
-    shipper_snap = snap_context.shipper_snap_distances[shipper_id]
-    pickup_snap = snap_context.pickup_snap_distance
-    dropoff_snap = snap_context.dropoff_snap_distance
-    return (
-        shipper_snap
-        + dist_to_pickup
-        + pickup_snap
-        + pickup_snap
-        + dist_pickup_to_dropoff
-        + dropoff_snap
-    )
-
-
-def rank_shippers_for_order(
-    shipper_ids: list[str],
-    shipper_nodes: dict[str, str],  # shipper_id -> node_id
-    pickup_node: str,
-    dropoff_node: str,
-    cost_matrix: DistanceProvider,
-    *,
-    snap_context: AssignmentSnapContext | None = None,
-) -> AssignmentResult:
-    """Rank shippers by total distance for a single order.
-
-    For each shipper: total = SP(shipper→pickup) + SP(pickup→dropoff)
-    plus snap distances when `snap_context` is provided (matches API legs).
-    Returns sorted by total distance, tie-break by shipper_id.
-    """
-    routes: list[ShipperRoute] = []
-
-    for sid in shipper_ids:
-        snode = shipper_nodes[sid]
-
-        dist_to_pickup = cost_matrix.get_distance(snode, pickup_node)
-        dist_pickup_to_dropoff = cost_matrix.get_distance(pickup_node, dropoff_node)
-
-        unreachable = (
-            dist_to_pickup is None
-            or dist_pickup_to_dropoff is None
-            or dist_to_pickup == float("inf")
-            or dist_pickup_to_dropoff == float("inf")
-        )
-        if unreachable:
-            routes.append(ShipperRoute(
-                shipper_id=sid,
-                legs=[],
-                total_distance_meters=float("inf"),
-                feasible=False,
-            ))
-            continue
-
-        graph_total = dist_to_pickup + dist_pickup_to_dropoff
-        total = _assignment_total_distance(
-            sid, graph_total, dist_to_pickup, dist_pickup_to_dropoff, snap_context
-        )
-        path_to_pickup = cost_matrix.get_path(snode, pickup_node) or []
-        path_to_dropoff = cost_matrix.get_path(pickup_node, dropoff_node) or []
-
-        legs = [
-            ("to_pickup", path_to_pickup, dist_to_pickup),
-            ("to_dropoff", path_to_dropoff, dist_pickup_to_dropoff),
-        ]
-
-        routes.append(ShipperRoute(
-            shipper_id=sid,
-            legs=legs,
-            total_distance_meters=total,
-            feasible=True,
-        ))
-
-    routes.sort(key=lambda r: (not r.feasible, r.total_distance_meters, r.shipper_id))
-
-    recommended = None
-    for r in routes:
-        if r.feasible:
-            recommended = r.shipper_id
-            break
-
-    return AssignmentResult(
-        recommended_shipper_id=recommended,
-        ranking=routes,
-    )
 </file>
 
 <file path="backend/app/domain/cost_model.py">
@@ -1604,6 +1313,50 @@ class NoRouteError(Exception):
 
     def __init__(self, message: str = NO_ROUTE_DETAIL) -> None:
         super().__init__(message)
+</file>
+
+<file path="backend/app/domain/graph_types.py">
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class GraphBBox:
+    min_latitude: float
+    min_longitude: float
+    max_latitude: float
+    max_longitude: float
+
+
+@dataclass(frozen=True)
+class GraphMetadata:
+    graph_version: str
+    bbox: GraphBBox
+    # Informational; snap_service no longer rejects clicks beyond this distance.
+    max_snap_distance_meters: float
+
+
+@dataclass(frozen=True)
+class GraphNode:
+    latitude: float
+    longitude: float
+
+
+@dataclass(frozen=True)
+class GraphEdge:
+    from_node: str
+    to_node: str
+    distance: float
+    oneway: bool = False
+    road_type: str = "default"
+
+
+@dataclass(frozen=True)
+class ValidatedGraph:
+    metadata: GraphMetadata
+    nodes: dict[str, GraphNode]
+    edges: list[GraphEdge]
 </file>
 
 <file path="backend/app/http/route_errors.py">
@@ -1841,6 +1594,142 @@ def test_maps_no_route_to_404_detail():
     assert isinstance(exc, HTTPException)
     assert exc.status_code == 404
     assert exc.detail == "No route found between selected points"
+</file>
+
+<file path="backend/tests/unit/test_assignment_tour.py">
+import json
+from pathlib import Path
+
+import pytest
+
+from app.application.cost_matrix import CostMatrix
+from app.application.graph_runtime import build_graph_runtime
+from app.domain.assignment import rank_shippers_for_order
+from app.domain.tsp import Stop, optimize_tour
+
+FIXTURE_GRAPH_PATH = (
+    Path(__file__).resolve().parents[2] / "app" / "data" / "road_graph.json"
+)
+
+
+@pytest.fixture
+def runtime():
+    return build_graph_runtime(FIXTURE_GRAPH_PATH)
+
+
+@pytest.fixture
+def cost_matrix(runtime):
+    cm = CostMatrix(runtime)
+    # All nodes in fixture
+    all_nodes = list(runtime.nodes.keys())
+    cm.compute_for_nodes(all_nodes)
+    return cm
+
+
+def test_cost_matrix_self_distance_is_zero(cost_matrix):
+    for node_id in ["node-start", "node-mid", "node-end"]:
+        assert cost_matrix.get_distance(node_id, node_id) == pytest.approx(0.0)
+
+
+def test_cost_matrix_symmetric_for_bidirectional_edges(cost_matrix):
+    dist_forward = cost_matrix.get_distance("node-start", "node-mid")
+    dist_reverse = cost_matrix.get_distance("node-mid", "node-start")
+    assert dist_forward == pytest.approx(dist_reverse)
+
+
+def test_cost_matrix_path_exists(cost_matrix):
+    path = cost_matrix.get_path("node-start", "node-end")
+    assert path is not None
+    assert len(path) >= 2
+    assert path[0] == "node-start"
+    assert path[-1] == "node-end"
+
+
+def test_assignment_ranks_shippers_by_distance(cost_matrix):
+    # 2 shippers at different locations
+    shipper_ids = ["s1", "s2"]
+    shipper_nodes = {
+        "s1": "node-start",
+        "s2": "node-mid",
+    }
+    pickup_node = "node-north"
+    dropoff_node = "node-end"
+
+    result = rank_shippers_for_order(
+        shipper_ids, shipper_nodes, pickup_node, dropoff_node, cost_matrix
+    )
+
+    assert result.recommended_shipper_id is not None
+    assert len(result.ranking) == 2
+    # All should be feasible
+    assert all(r.feasible for r in result.ranking)
+    # Should be sorted by distance
+    assert result.ranking[0].total_distance_meters <= result.ranking[1].total_distance_meters
+
+
+def test_assignment_recommends_closest_shipper(cost_matrix):
+    shipper_ids = ["s1", "s2"]
+    shipper_nodes = {
+        "s1": "node-start",  # closer to pickup
+        "s2": "node-end",    # farther
+    }
+    pickup_node = "node-mid"
+    dropoff_node = "node-end"
+
+    result = rank_shippers_for_order(
+        shipper_ids, shipper_nodes, pickup_node, dropoff_node, cost_matrix
+    )
+
+    # s1 (node-start) is closer to node-mid than s2 (node-end)
+    assert result.recommended_shipper_id == "s1"
+
+
+def test_tour_optimal_for_two_orders(cost_matrix):
+    stops = [
+        Stop(order_id="o1", kind="pickup", node_id="node-start"),
+        Stop(order_id="o1", kind="dropoff", node_id="node-mid"),
+        Stop(order_id="o2", kind="pickup", node_id="node-north"),
+        Stop(order_id="o2", kind="dropoff", node_id="node-end"),
+    ]
+
+    tour = optimize_tour("node-start", stops, cost_matrix)
+
+    assert tour.feasible is True
+    assert tour.total_distance_meters > 0
+    assert len(tour.ordered_stops) == 4
+
+    # Check precedence: pickup before dropoff for each order
+    seen = {}
+    for stop in tour.ordered_stops:
+        if stop.order_id not in seen:
+            seen[stop.order_id] = []
+        seen[stop.order_id].append(stop.kind)
+
+    for order_id, kinds in seen.items():
+        pickup_idx = kinds.index("pickup")
+        dropoff_idx = kinds.index("dropoff")
+        assert pickup_idx < dropoff_idx
+
+
+def test_tour_empty_stops(cost_matrix):
+    tour = optimize_tour("node-start", [], cost_matrix)
+    assert tour.total_distance_meters == pytest.approx(0.0)
+    assert tour.optimal is True
+
+
+def test_tour_single_order(cost_matrix):
+    stops = [
+        Stop(order_id="o1", kind="pickup", node_id="node-mid"),
+        Stop(order_id="o1", kind="dropoff", node_id="node-end"),
+    ]
+
+    tour = optimize_tour("node-start", stops, cost_matrix)
+
+    assert tour.feasible is True
+    assert tour.total_distance_meters > 0
+    assert len(tour.ordered_stops) == 2
+    assert tour.ordered_stops[0].kind == "pickup"
+    assert tour.ordered_stops[1].kind == "dropoff"
 </file>
 
 <file path="backend/tests/unit/test_directed_graph.py">
@@ -2663,93 +2552,224 @@ export function distanceToNearestNodeMeters(point, nodes) {
 }
 </file>
 
-<file path="backend/app/application/graph_runtime.py">
+<file path="backend/app/application/cost_matrix.py">
 from __future__ import annotations
 
-import threading
-from dataclasses import dataclass, field
-from pathlib import Path
+from dataclasses import dataclass
 
+from app.application.graph_runtime import GraphRuntime, _options_hash
 from app.domain.cost_model import RoutingOptions
-from app.domain.graph import Adjacency, build_directed_adjacency, build_reverse_adjacency
-from app.domain.graph_types import GraphEdge, GraphMetadata, GraphNode, ValidatedGraph
-from app.infrastructure.graph_loader import DEFAULT_GRAPH_PATH, load_graph_data
-from app.infrastructure.grid_index import GridSpatialIndex
-from app.infrastructure.route_cache import RouteCache
-
-
-def _options_hash(options: RoutingOptions) -> str:
-    return f"{sorted(options.avoid_road_types)}|{sorted(options.avoid_edge_ids)}"
+from app.domain.dijkstra import bidirectional_dijkstra
+from app.domain.errors import NoRouteError
+from app.application.snap_service import snap_point
+from app.infrastructure.route_cache import CachedGraphPath
 
 
 @dataclass(frozen=True)
-class GraphRuntime:
-    metadata: GraphMetadata
-    nodes: dict[str, GraphNode]
-    edges: list[GraphEdge]
-    base_adjacency: Adjacency
-    grid_index: GridSpatialIndex
-    route_cache: RouteCache
-    _adjacency_cache: dict[str, Adjacency] = field(default_factory=dict)
-    _reverse_adjacency_cache: dict[str, Adjacency] = field(default_factory=dict)
-    _adjacency_lock: threading.Lock = field(
-        default_factory=threading.Lock, compare=False, repr=False
+class CostMatrixEntry:
+    distance_meters: float
+    path_node_ids: tuple[str, ...]
+
+
+class CostMatrix:
+    """Many-to-many distance matrix using Dijkstra from each source.
+
+    Caches results by (graph_version, options_hash, src_node, dst_node).
+    Pair lookups compute on demand when not yet precomputed.
+    """
+
+    def __init__(self, runtime: GraphRuntime, options: RoutingOptions | None = None):
+        if options is None:
+            options = RoutingOptions()
+        self._runtime = runtime
+        self._options = options
+        self._opts_hash = _options_hash(options)
+        self._entries: dict[tuple[str, str], CostMatrixEntry] = {}
+
+    def get_distance(self, src_node: str, dst_node: str) -> float | None:
+        entry = self._get_entry(src_node, dst_node)
+        return entry.distance_meters
+
+    def get_path(self, src_node: str, dst_node: str) -> list[str] | None:
+        entry = self._get_entry(src_node, dst_node)
+        return list(entry.path_node_ids)
+
+    def _get_entry(self, src_node: str, dst_node: str) -> CostMatrixEntry:
+        key = (src_node, dst_node)
+        if key not in self._entries:
+            self._entries[key] = self._compute_pair(src_node, dst_node)
+        return self._entries[key]
+
+    def _compute_pair(self, src_node: str, dst_node: str) -> CostMatrixEntry:
+        if src_node == dst_node:
+            return CostMatrixEntry(distance_meters=0.0, path_node_ids=(src_node,))
+
+        version = self._runtime.metadata.graph_version
+        cache = self._runtime.route_cache
+        cached = cache.get(version, self._opts_hash, src_node, dst_node)
+        if cached is not None:
+            return CostMatrixEntry(
+                distance_meters=cached.graph_distance_meters,
+                path_node_ids=tuple(cached.node_ids),
+            )
+
+        adjacency = self._runtime.adjacency_for(self._options)
+        reverse_adjacency = self._runtime.reverse_adjacency_for(self._options)
+        try:
+            result = bidirectional_dijkstra(
+                adjacency, src_node, dst_node, reverse_adjacency=reverse_adjacency
+            )
+            path = CachedGraphPath(
+                node_ids=list(result.node_ids),
+                graph_distance_meters=result.graph_distance_meters,
+            )
+            cache.put(version, self._opts_hash, src_node, dst_node, path)
+            return CostMatrixEntry(
+                distance_meters=result.graph_distance_meters,
+                path_node_ids=tuple(result.node_ids),
+            )
+        except NoRouteError:
+            return CostMatrixEntry(distance_meters=float("inf"), path_node_ids=())
+
+    def compute_for_nodes(self, node_ids: list[str]) -> None:
+        """Pre-compute distances between all pairs of given nodes."""
+        for src in node_ids:
+            for dst in node_ids:
+                self._get_entry(src, dst)
+
+    def snap_points(
+        self, coordinates: list[tuple[float, float]]
+    ) -> list[str]:
+        """Snap coordinates to node IDs, returning list of node IDs."""
+        node_ids = []
+        for lat, lon in coordinates:
+            snap = snap_point(self._runtime, lat, lon)
+            node_ids.append(snap.node_id)
+        return node_ids
+</file>
+
+<file path="backend/app/domain/assignment.py">
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from app.domain.protocols import DistanceProvider
+
+
+@dataclass(frozen=True)
+class AssignmentSnapContext:
+    shipper_snap_distances: dict[str, float]
+    pickup_snap_distance: float
+    dropoff_snap_distance: float
+
+
+@dataclass(frozen=True)
+class ShipperRoute:
+    shipper_id: str
+    legs: list[tuple[str, list[str], float]]  # (kind, path_node_ids, distance)
+    total_distance_meters: float
+    feasible: bool
+
+
+@dataclass(frozen=True)
+class AssignmentResult:
+    recommended_shipper_id: str | None
+    ranking: list[ShipperRoute]
+
+
+def _assignment_total_distance(
+    shipper_id: str,
+    graph_total: float,
+    dist_to_pickup: float,
+    dist_pickup_to_dropoff: float,
+    snap_context: AssignmentSnapContext | None,
+) -> float:
+    if snap_context is None:
+        return graph_total
+
+    shipper_snap = snap_context.shipper_snap_distances[shipper_id]
+    pickup_snap = snap_context.pickup_snap_distance
+    dropoff_snap = snap_context.dropoff_snap_distance
+    # pickup_snap appears twice: snap onto the road at pickup (leg 1 end)
+    # and snap off the road at pickup (leg 2 start), matching assignment legs.
+    return (
+        shipper_snap
+        + dist_to_pickup
+        + pickup_snap
+        + pickup_snap
+        + dist_pickup_to_dropoff
+        + dropoff_snap
     )
 
-    def _ensure_adjacency(self, options: RoutingOptions) -> None:
-        key = _options_hash(options)
-        if key in self._adjacency_cache and key in self._reverse_adjacency_cache:
-            return
 
-        with self._adjacency_lock:
-            if key in self._adjacency_cache and key in self._reverse_adjacency_cache:
-                return
-            validated = ValidatedGraph(
-                metadata=self.metadata, nodes=self.nodes, edges=self.edges
-            )
-            forward = build_directed_adjacency(validated, options)
-            self._adjacency_cache[key] = forward
-            self._reverse_adjacency_cache[key] = build_reverse_adjacency(forward)
+def rank_shippers_for_order(
+    shipper_ids: list[str],
+    shipper_nodes: dict[str, str],  # shipper_id -> node_id
+    pickup_node: str,
+    dropoff_node: str,
+    cost_matrix: DistanceProvider,
+    *,
+    snap_context: AssignmentSnapContext | None = None,
+) -> AssignmentResult:
+    """Rank shippers by total distance for a single order.
 
-    def adjacency_for(self, options: RoutingOptions | None = None) -> Adjacency:
-        if options is None:
-            options = RoutingOptions()
-        self._ensure_adjacency(options)
-        return self._adjacency_cache[_options_hash(options)]
+    For each shipper: total = SP(shipper→pickup) + SP(pickup→dropoff)
+    plus snap distances when `snap_context` is provided (matches API legs).
+    Returns sorted by total distance, tie-break by shipper_id.
+    """
+    routes: list[ShipperRoute] = []
 
-    def reverse_adjacency_for(self, options: RoutingOptions | None = None) -> Adjacency:
-        if options is None:
-            options = RoutingOptions()
-        self._ensure_adjacency(options)
-        return self._reverse_adjacency_cache[_options_hash(options)]
+    for sid in shipper_ids:
+        snode = shipper_nodes[sid]
 
-    @property
-    def adjacency(self) -> Adjacency:
-        return self.base_adjacency
+        dist_to_pickup = cost_matrix.get_distance(snode, pickup_node)
+        dist_pickup_to_dropoff = cost_matrix.get_distance(pickup_node, dropoff_node)
 
-    @property
-    def node_count(self) -> int:
-        return len(self.nodes)
+        unreachable = (
+            dist_to_pickup is None
+            or dist_pickup_to_dropoff is None
+            or dist_to_pickup == float("inf")
+            or dist_pickup_to_dropoff == float("inf")
+        )
+        if unreachable:
+            routes.append(ShipperRoute(
+                shipper_id=sid,
+                legs=[],
+                total_distance_meters=float("inf"),
+                feasible=False,
+            ))
+            continue
 
-    @property
-    def edge_count(self) -> int:
-        return len(self.edges)
+        graph_total = dist_to_pickup + dist_pickup_to_dropoff
+        total = _assignment_total_distance(
+            sid, graph_total, dist_to_pickup, dist_pickup_to_dropoff, snap_context
+        )
+        path_to_pickup = cost_matrix.get_path(snode, pickup_node) or []
+        path_to_dropoff = cost_matrix.get_path(pickup_node, dropoff_node) or []
 
+        legs = [
+            ("to_pickup", path_to_pickup, dist_to_pickup),
+            ("to_dropoff", path_to_dropoff, dist_pickup_to_dropoff),
+        ]
 
-def build_graph_runtime(path: Path | str | None = None) -> GraphRuntime:
-    graph_path = Path(path) if path is not None else DEFAULT_GRAPH_PATH
-    validated = load_graph_data(graph_path)
-    adjacency = build_directed_adjacency(validated)
-    grid_index = GridSpatialIndex(validated.nodes, validated.metadata.bbox)
-    route_cache = RouteCache()
+        routes.append(ShipperRoute(
+            shipper_id=sid,
+            legs=legs,
+            total_distance_meters=total,
+            feasible=True,
+        ))
 
-    return GraphRuntime(
-        metadata=validated.metadata,
-        nodes=validated.nodes,
-        edges=validated.edges,
-        base_adjacency=adjacency,
-        grid_index=grid_index,
-        route_cache=route_cache,
+    routes.sort(key=lambda r: (not r.feasible, r.total_distance_meters, r.shipper_id))
+
+    recommended = None
+    for r in routes:
+        if r.feasible:
+            recommended = r.shipper_id
+            break
+
+    return AssignmentResult(
+        recommended_shipper_id=recommended,
+        ranking=routes,
     )
 </file>
 
@@ -3284,78 +3304,6 @@ class GridSpatialIndex:
         return lat_min, lat_max, lon_min, lon_max
 </file>
 
-<file path="backend/app/infrastructure/route_cache.py">
-from __future__ import annotations
-
-import threading
-from collections import OrderedDict
-from dataclasses import dataclass, field
-
-DEFAULT_ROUTE_CACHE_LIMIT = 1000
-
-
-@dataclass(frozen=True)
-class CachedGraphPath:
-    node_ids: list[str]
-    graph_distance_meters: float
-
-
-def make_cache_key(
-    graph_version: str,
-    options_hash: str,
-    start_node_id: str,
-    end_node_id: str,
-) -> str:
-    return f"{graph_version}|{options_hash}|{start_node_id}|{end_node_id}"
-
-
-@dataclass
-class RouteCache:
-    limit: int = DEFAULT_ROUTE_CACHE_LIMIT
-    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
-
-    def __post_init__(self) -> None:
-        self._entries: OrderedDict[str, CachedGraphPath] = OrderedDict()
-
-    @property
-    def size(self) -> int:
-        return len(self._entries)
-
-    def get(
-        self,
-        graph_version: str,
-        options_hash: str,
-        start_node_id: str,
-        end_node_id: str,
-    ) -> CachedGraphPath | None:
-        direct_key = make_cache_key(
-            graph_version, options_hash, start_node_id, end_node_id
-        )
-        with self._lock:
-            if direct_key in self._entries:
-                self._entries.move_to_end(direct_key)
-                return self._entries[direct_key]
-        return None
-
-    def put(
-        self,
-        graph_version: str,
-        options_hash: str,
-        start_node_id: str,
-        end_node_id: str,
-        path: CachedGraphPath,
-    ) -> None:
-        key = make_cache_key(
-            graph_version, options_hash, start_node_id, end_node_id
-        )
-        with self._lock:
-            if key in self._entries:
-                self._entries.move_to_end(key)
-            self._entries[key] = path
-            while len(self._entries) > self.limit:
-                self._entries.popitem(last=False)
-</file>
-
 <file path="backend/app/services/shortest_path_service.py">
 from __future__ import annotations
 
@@ -3787,193 +3735,6 @@ def test_graph_loads_during_lifespan_not_lazy_on_first_request(monkeypatch):
         assert len(runtime.adjacency) >= 4
 </file>
 
-<file path="backend/tests/unit/test_route_cache.py">
-import json
-from pathlib import Path
-
-import pytest
-
-from app.application.graph_runtime import build_graph_runtime
-from app.domain.dijkstra import bidirectional_dijkstra
-from app.infrastructure.route_cache import (
-    CachedGraphPath,
-    RouteCache,
-    make_cache_key,
-)
-from app.services.shortest_path_service import find_cached_or_compute_graph_path
-
-FIXTURE_GRAPH_PATH = (
-    Path(__file__).resolve().parents[2] / "app" / "data" / "road_graph.json"
-)
-
-
-def test_make_cache_key_uses_version_and_node_ids_only():
-    assert make_cache_key("v1", "opts", "a", "b") == "v1|opts|a|b"
-    assert make_cache_key("v1", "opts", "a", "b") == make_cache_key("v1", "opts", "a", "b")
-
-
-def test_first_put_increases_size():
-    cache = RouteCache(limit=1000)
-    cache.put(
-        "v1",
-        "opts",
-        "node-start",
-        "node-end",
-        CachedGraphPath(node_ids=["node-start", "node-end"], graph_distance_meters=1.0),
-    )
-    assert cache.size == 1
-
-
-def test_get_moves_entry_to_mru_for_lru_eviction():
-    cache = RouteCache(limit=2)
-    cache.put("v", "o", "a", "b", CachedGraphPath(["a", "b"], 1.0))
-    cache.put("v", "o", "c", "d", CachedGraphPath(["c", "d"], 2.0))
-    assert cache.get("v", "o", "a", "b") is not None
-    cache.put("v", "o", "e", "f", CachedGraphPath(["e", "f"], 3.0))
-    assert cache.get("v", "o", "c", "d") is None
-    assert cache.get("v", "o", "a", "b") is not None
-    assert cache.size == 2
-
-
-def test_lru_evicts_oldest_when_exceeding_limit():
-    cache = RouteCache(limit=1000)
-    for i in range(1001):
-        cache.put(
-            "v",
-            "o",
-            f"n{i}",
-            f"m{i}",
-            CachedGraphPath(node_ids=[f"n{i}", f"m{i}"], graph_distance_meters=float(i)),
-        )
-    assert cache.size == 1000
-    assert cache.get("v", "o", "n0", "m0") is None
-    assert cache.get("v", "o", "n1000", "m1000") is not None
-
-
-def test_reverse_lookup_does_not_synthesize_from_forward_entry():
-    cache = RouteCache()
-    cache.put(
-        "hcm-fixture-v2",
-        "opts",
-        "node-start",
-        "node-end",
-        CachedGraphPath(
-            node_ids=["node-start", "node-mid", "node-end"],
-            graph_distance_meters=300.5,
-        ),
-    )
-    assert cache.get("hcm-fixture-v2", "opts", "node-end", "node-start") is None
-    assert cache.size == 1
-
-
-def test_different_graph_version_is_distinct_key():
-    cache = RouteCache()
-    cache.put("v1", "o", "a", "b", CachedGraphPath(["a", "b"], 1.0))
-    assert cache.get("v2", "o", "a", "b") is None
-    assert cache.size == 1
-
-
-@pytest.fixture
-def runtime():
-    return build_graph_runtime(FIXTURE_GRAPH_PATH)
-
-
-def test_service_same_snapped_pair_does_not_duplicate_cache_entries(runtime):
-    start_a = (10.7785, 106.7149)
-    start_b = (10.7786, 106.7150)
-    end = (10.7808, 106.7172)
-    first = find_cached_or_compute_graph_path(runtime, start_a, end)
-    size_after_first = runtime.route_cache.size
-    second = find_cached_or_compute_graph_path(runtime, start_b, end)
-    assert second.from_cache is True
-    assert runtime.route_cache.size == size_after_first
-    assert first.graph_path.node_ids == second.graph_path.node_ids
-    assert first.graph_path.graph_distance_meters == pytest.approx(
-        second.graph_path.graph_distance_meters
-    )
-
-
-def test_service_reverse_computes_separate_cache_entry_on_directed_graph(runtime):
-    forward = find_cached_or_compute_graph_path(
-        runtime, (10.7785, 106.7149), (10.7808, 106.7172)
-    )
-    assert forward.from_cache is False
-    size_one = runtime.route_cache.size
-    reverse = find_cached_or_compute_graph_path(
-        runtime, (10.7808, 106.7172), (10.7785, 106.7149)
-    )
-    assert reverse.from_cache is False
-    assert runtime.route_cache.size == size_one + 1
-    assert reverse.graph_path.graph_distance_meters == pytest.approx(
-        forward.graph_path.graph_distance_meters
-    )
-
-
-def test_oneway_reverse_is_not_served_from_forward_cache(tmp_path):
-    path = _write_versioned_graph(
-        tmp_path,
-        "oneway-v1",
-        edges=[{"from": "a", "to": "b", "distance": 100.0, "oneway": True}],
-    )
-    runtime = build_graph_runtime(path)
-    from app.domain.errors import NoRouteError
-
-    forward = find_cached_or_compute_graph_path(runtime, (10.5, 106.5), (10.51, 106.51))
-    assert forward.from_cache is False
-    with pytest.raises(NoRouteError):
-        find_cached_or_compute_graph_path(runtime, (10.51, 106.51), (10.5, 106.5))
-    assert runtime.route_cache.get(
-        runtime.metadata.graph_version,
-        "[]|[]",
-        "b",
-        "a",
-    ) is None
-
-
-def _write_versioned_graph(
-    tmp_path: Path,
-    version: str,
-    *,
-    edges: list[dict] | None = None,
-) -> Path:
-    path = (tmp_path / "graph.json").resolve()
-    assert path.is_relative_to(tmp_path.resolve())
-    payload = {
-        "metadata": {
-            "graph_version": version,
-            "bbox": {
-                "min_latitude": 10.0,
-                "min_longitude": 106.0,
-                "max_latitude": 11.0,
-                "max_longitude": 107.0,
-            },
-            "max_snap_distance_meters": 500.0,
-        },
-        "nodes": {
-            "a": {"latitude": 10.5, "longitude": 106.5},
-            "b": {"latitude": 10.51, "longitude": 106.51},
-        },
-        "edges": edges if edges is not None else [{"from": "a", "to": "b", "distance": 10.0}],
-    }
-    path.write_text(json.dumps(payload), encoding="utf-8")
-    return path
-
-
-def test_version_change_does_not_reuse_old_cache_entry(tmp_path):
-    path_v1 = _write_versioned_graph(tmp_path, "cache-v1")
-    rt1 = build_graph_runtime(path_v1)
-    find_cached_or_compute_graph_path(rt1, (10.5, 106.5), (10.51, 106.51))
-    assert rt1.route_cache.size == 1
-
-    path_v2 = _write_versioned_graph(tmp_path, "cache-v2")
-    rt2 = build_graph_runtime(path_v2)
-    assert rt2.route_cache.size == 0
-    result = find_cached_or_compute_graph_path(rt2, (10.5, 106.5), (10.51, 106.51))
-    assert result.from_cache is False
-    dijkstra = bidirectional_dijkstra(rt2.adjacency, "a", "b")
-    assert result.graph_path.node_ids == dijkstra.node_ids
-</file>
-
 <file path="backend/tests/unit/test_snapper.py">
 import json
 from pathlib import Path
@@ -4263,6 +4024,168 @@ ModeSwitcher.propTypes = {
   orderStep: PropTypes.oneOf(Object.values(ORDER_STEP)).isRequired,
   onCancelPendingPickup: PropTypes.func.isRequired,
 };
+</file>
+
+<file path="backend/app/application/graph_runtime.py">
+from __future__ import annotations
+
+import threading
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from app.domain.cost_model import RoutingOptions
+from app.domain.graph import Adjacency, build_directed_adjacency, build_reverse_adjacency
+from app.domain.graph_types import GraphEdge, GraphMetadata, GraphNode, ValidatedGraph
+from app.infrastructure.graph_loader import DEFAULT_GRAPH_PATH, load_graph_data
+from app.infrastructure.grid_index import GridSpatialIndex
+from app.infrastructure.route_cache import RouteCache
+
+
+def _options_hash(options: RoutingOptions) -> str:
+    return f"{sorted(options.avoid_road_types)}|{sorted(options.avoid_edge_ids)}"
+
+
+@dataclass(frozen=True)
+class GraphRuntime:
+    metadata: GraphMetadata
+    nodes: dict[str, GraphNode]
+    edges: list[GraphEdge]
+    base_adjacency: Adjacency
+    grid_index: GridSpatialIndex
+    route_cache: RouteCache
+    _adjacency_cache: dict[str, Adjacency] = field(default_factory=dict)
+    _reverse_adjacency_cache: dict[str, Adjacency] = field(default_factory=dict)
+    _adjacency_lock: threading.Lock = field(
+        default_factory=threading.Lock, compare=False, repr=False
+    )
+
+    def _ensure_adjacency(self, options: RoutingOptions) -> None:
+        key = _options_hash(options)
+        if key in self._adjacency_cache and key in self._reverse_adjacency_cache:
+            return
+
+        with self._adjacency_lock:
+            if key in self._adjacency_cache and key in self._reverse_adjacency_cache:
+                return
+            validated = ValidatedGraph(
+                metadata=self.metadata, nodes=self.nodes, edges=self.edges
+            )
+            forward = build_directed_adjacency(validated, options)
+            self._adjacency_cache[key] = forward
+            self._reverse_adjacency_cache[key] = build_reverse_adjacency(forward)
+
+    def adjacency_for(self, options: RoutingOptions | None = None) -> Adjacency:
+        if options is None:
+            options = RoutingOptions()
+        self._ensure_adjacency(options)
+        return self._adjacency_cache[_options_hash(options)]
+
+    def reverse_adjacency_for(self, options: RoutingOptions | None = None) -> Adjacency:
+        if options is None:
+            options = RoutingOptions()
+        self._ensure_adjacency(options)
+        return self._reverse_adjacency_cache[_options_hash(options)]
+
+    @property
+    def adjacency(self) -> Adjacency:
+        return self.base_adjacency
+
+    @property
+    def node_count(self) -> int:
+        return len(self.nodes)
+
+    @property
+    def edge_count(self) -> int:
+        return len(self.edges)
+
+
+def build_graph_runtime(path: Path | str | None = None) -> GraphRuntime:
+    graph_path = Path(path) if path is not None else DEFAULT_GRAPH_PATH
+    validated = load_graph_data(graph_path)
+    adjacency = build_directed_adjacency(validated)
+    grid_index = GridSpatialIndex(validated.nodes, validated.metadata.bbox)
+    route_cache = RouteCache()
+
+    return GraphRuntime(
+        metadata=validated.metadata,
+        nodes=validated.nodes,
+        edges=validated.edges,
+        base_adjacency=adjacency,
+        grid_index=grid_index,
+        route_cache=route_cache,
+    )
+</file>
+
+<file path="backend/app/infrastructure/route_cache.py">
+from __future__ import annotations
+
+import threading
+from collections import OrderedDict
+from dataclasses import dataclass, field
+
+DEFAULT_ROUTE_CACHE_LIMIT = 1000
+
+
+@dataclass(frozen=True)
+class CachedGraphPath:
+    node_ids: list[str]
+    graph_distance_meters: float
+
+
+def make_cache_key(
+    graph_version: str,
+    options_hash: str,
+    start_node_id: str,
+    end_node_id: str,
+) -> str:
+    return f"{graph_version}|{options_hash}|{start_node_id}|{end_node_id}"
+
+
+@dataclass
+class RouteCache:
+    limit: int = DEFAULT_ROUTE_CACHE_LIMIT
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def __post_init__(self) -> None:
+        self._entries: OrderedDict[str, CachedGraphPath] = OrderedDict()
+
+    @property
+    def size(self) -> int:
+        return len(self._entries)
+
+    def get(
+        self,
+        graph_version: str,
+        options_hash: str,
+        start_node_id: str,
+        end_node_id: str,
+    ) -> CachedGraphPath | None:
+        direct_key = make_cache_key(
+            graph_version, options_hash, start_node_id, end_node_id
+        )
+        with self._lock:
+            if direct_key in self._entries:
+                self._entries.move_to_end(direct_key)
+                return self._entries[direct_key]
+        return None
+
+    def put(
+        self,
+        graph_version: str,
+        options_hash: str,
+        start_node_id: str,
+        end_node_id: str,
+        path: CachedGraphPath,
+    ) -> None:
+        key = make_cache_key(
+            graph_version, options_hash, start_node_id, end_node_id
+        )
+        with self._lock:
+            if key in self._entries:
+                self._entries.move_to_end(key)
+            self._entries[key] = path
+            while len(self._entries) > self.limit:
+                self._entries.popitem(last=False)
 </file>
 
 <file path="backend/app/services/route_computation.py">
@@ -4683,6 +4606,193 @@ def test_tours_threshold_zero_disables_brute_force(client):
     # 4 stops is under the default threshold (8), so brute-force would run
     # and return optimal=true; with the override to 0 it must be False.
     assert body["optimal"] is False
+</file>
+
+<file path="backend/tests/unit/test_route_cache.py">
+import json
+from pathlib import Path
+
+import pytest
+
+from app.application.graph_runtime import build_graph_runtime
+from app.domain.dijkstra import bidirectional_dijkstra
+from app.infrastructure.route_cache import (
+    CachedGraphPath,
+    RouteCache,
+    make_cache_key,
+)
+from app.services.shortest_path_service import find_cached_or_compute_graph_path
+
+FIXTURE_GRAPH_PATH = (
+    Path(__file__).resolve().parents[2] / "app" / "data" / "road_graph.json"
+)
+
+
+def test_make_cache_key_uses_version_and_node_ids_only():
+    assert make_cache_key("v1", "opts", "a", "b") == "v1|opts|a|b"
+    assert make_cache_key("v1", "opts", "a", "b") == make_cache_key("v1", "opts", "a", "b")
+
+
+def test_first_put_increases_size():
+    cache = RouteCache(limit=1000)
+    cache.put(
+        "v1",
+        "opts",
+        "node-start",
+        "node-end",
+        CachedGraphPath(node_ids=["node-start", "node-end"], graph_distance_meters=1.0),
+    )
+    assert cache.size == 1
+
+
+def test_get_moves_entry_to_mru_for_lru_eviction():
+    cache = RouteCache(limit=2)
+    cache.put("v", "o", "a", "b", CachedGraphPath(["a", "b"], 1.0))
+    cache.put("v", "o", "c", "d", CachedGraphPath(["c", "d"], 2.0))
+    assert cache.get("v", "o", "a", "b") is not None
+    cache.put("v", "o", "e", "f", CachedGraphPath(["e", "f"], 3.0))
+    assert cache.get("v", "o", "c", "d") is None
+    assert cache.get("v", "o", "a", "b") is not None
+    assert cache.size == 2
+
+
+def test_lru_evicts_oldest_when_exceeding_limit():
+    cache = RouteCache(limit=1000)
+    for i in range(1001):
+        cache.put(
+            "v",
+            "o",
+            f"n{i}",
+            f"m{i}",
+            CachedGraphPath(node_ids=[f"n{i}", f"m{i}"], graph_distance_meters=float(i)),
+        )
+    assert cache.size == 1000
+    assert cache.get("v", "o", "n0", "m0") is None
+    assert cache.get("v", "o", "n1000", "m1000") is not None
+
+
+def test_reverse_lookup_does_not_synthesize_from_forward_entry():
+    cache = RouteCache()
+    cache.put(
+        "hcm-fixture-v2",
+        "opts",
+        "node-start",
+        "node-end",
+        CachedGraphPath(
+            node_ids=["node-start", "node-mid", "node-end"],
+            graph_distance_meters=300.5,
+        ),
+    )
+    assert cache.get("hcm-fixture-v2", "opts", "node-end", "node-start") is None
+    assert cache.size == 1
+
+
+def test_different_graph_version_is_distinct_key():
+    cache = RouteCache()
+    cache.put("v1", "o", "a", "b", CachedGraphPath(["a", "b"], 1.0))
+    assert cache.get("v2", "o", "a", "b") is None
+    assert cache.size == 1
+
+
+@pytest.fixture
+def runtime():
+    return build_graph_runtime(FIXTURE_GRAPH_PATH)
+
+
+def test_service_same_snapped_pair_does_not_duplicate_cache_entries(runtime):
+    start_a = (10.7785, 106.7149)
+    start_b = (10.7786, 106.7150)
+    end = (10.7808, 106.7172)
+    first = find_cached_or_compute_graph_path(runtime, start_a, end)
+    size_after_first = runtime.route_cache.size
+    second = find_cached_or_compute_graph_path(runtime, start_b, end)
+    assert second.from_cache is True
+    assert runtime.route_cache.size == size_after_first
+    assert first.graph_path.node_ids == second.graph_path.node_ids
+    assert first.graph_path.graph_distance_meters == pytest.approx(
+        second.graph_path.graph_distance_meters
+    )
+
+
+def test_service_reverse_computes_separate_cache_entry_on_directed_graph(runtime):
+    forward = find_cached_or_compute_graph_path(
+        runtime, (10.7785, 106.7149), (10.7808, 106.7172)
+    )
+    assert forward.from_cache is False
+    size_one = runtime.route_cache.size
+    reverse = find_cached_or_compute_graph_path(
+        runtime, (10.7808, 106.7172), (10.7785, 106.7149)
+    )
+    assert reverse.from_cache is False
+    assert runtime.route_cache.size == size_one + 1
+    assert reverse.graph_path.graph_distance_meters == pytest.approx(
+        forward.graph_path.graph_distance_meters
+    )
+
+
+def test_oneway_reverse_is_not_served_from_forward_cache(tmp_path):
+    path = _write_versioned_graph(
+        tmp_path,
+        "oneway-v1",
+        edges=[{"from": "a", "to": "b", "distance": 100.0, "oneway": True}],
+    )
+    runtime = build_graph_runtime(path)
+    from app.domain.errors import NoRouteError
+
+    forward = find_cached_or_compute_graph_path(runtime, (10.5, 106.5), (10.51, 106.51))
+    assert forward.from_cache is False
+    with pytest.raises(NoRouteError):
+        find_cached_or_compute_graph_path(runtime, (10.51, 106.51), (10.5, 106.5))
+    assert runtime.route_cache.get(
+        runtime.metadata.graph_version,
+        "[]|[]",
+        "b",
+        "a",
+    ) is None
+
+
+def _write_versioned_graph(
+    tmp_path: Path,
+    version: str,
+    *,
+    edges: list[dict] | None = None,
+) -> Path:
+    path = (tmp_path / "graph.json").resolve()
+    assert path.is_relative_to(tmp_path.resolve())
+    payload = {
+        "metadata": {
+            "graph_version": version,
+            "bbox": {
+                "min_latitude": 10.0,
+                "min_longitude": 106.0,
+                "max_latitude": 11.0,
+                "max_longitude": 107.0,
+            },
+            "max_snap_distance_meters": 500.0,
+        },
+        "nodes": {
+            "a": {"latitude": 10.5, "longitude": 106.5},
+            "b": {"latitude": 10.51, "longitude": 106.51},
+        },
+        "edges": edges if edges is not None else [{"from": "a", "to": "b", "distance": 10.0}],
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_version_change_does_not_reuse_old_cache_entry(tmp_path):
+    path_v1 = _write_versioned_graph(tmp_path, "cache-v1")
+    rt1 = build_graph_runtime(path_v1)
+    find_cached_or_compute_graph_path(rt1, (10.5, 106.5), (10.51, 106.51))
+    assert rt1.route_cache.size == 1
+
+    path_v2 = _write_versioned_graph(tmp_path, "cache-v2")
+    rt2 = build_graph_runtime(path_v2)
+    assert rt2.route_cache.size == 0
+    result = find_cached_or_compute_graph_path(rt2, (10.5, 106.5), (10.51, 106.51))
+    assert result.from_cache is False
+    dijkstra = bidirectional_dijkstra(rt2.adjacency, "a", "b")
+    assert result.graph_path.node_ids == dijkstra.node_ids
 </file>
 
 <file path="frontend/src/App.css">
@@ -5250,6 +5360,204 @@ button, input, textarea, select {
 }
 </file>
 
+<file path="backend/tests/unit/test_route_reconstruction.py">
+from pathlib import Path
+
+import pytest
+
+from app.application.graph_runtime import build_graph_runtime
+from app.application.node_lookup import GraphNodeLookup
+from app.domain.dijkstra import bidirectional_dijkstra
+from app.domain.route_reconstruction import (
+    RouteCoordinate,
+    compute_total_distance_meters,
+    dedupe_adjacent_exact_coordinates,
+    reconstruct_route_points,
+)
+from app.application.snap_service import snap_point
+
+FIXTURE_GRAPH_PATH = (
+    Path(__file__).resolve().parents[2] / "app" / "data" / "road_graph.json"
+)
+
+
+@pytest.fixture
+def runtime():
+    return build_graph_runtime(FIXTURE_GRAPH_PATH)
+
+
+def _coord(lat: float, lon: float) -> RouteCoordinate:
+    return RouteCoordinate(latitude=lat, longitude=lon)
+
+
+def test_route_points_begin_with_clicked_start_and_end_with_clicked_end(runtime):
+    start = (10.7785, 106.7149)
+    end = (10.7808, 106.7172)
+    start_snap = snap_point(runtime, start[0], start[1])
+    end_snap = snap_point(runtime, end[0], end[1])
+    dijkstra = bidirectional_dijkstra(
+        runtime.adjacency, start_snap.node_id, end_snap.node_id
+    )
+    route = reconstruct_route_points(
+        GraphNodeLookup(runtime.nodes),
+        clicked_start=start,
+        clicked_end=end,
+        dijkstra_node_ids=dijkstra.node_ids,
+    )
+    assert route[0].latitude == pytest.approx(start[0])
+    assert route[0].longitude == pytest.approx(start[1])
+    assert route[-1].latitude == pytest.approx(end[0])
+    assert route[-1].longitude == pytest.approx(end[1])
+
+
+def test_intermediate_points_follow_dijkstra_node_order(runtime):
+    start = (10.7785, 106.7149)
+    end = (10.7808, 106.7172)
+    start_snap = snap_point(runtime, start[0], start[1])
+    end_snap = snap_point(runtime, end[0], end[1])
+    dijkstra = bidirectional_dijkstra(
+        runtime.adjacency, start_snap.node_id, end_snap.node_id
+    )
+    route = reconstruct_route_points(
+        GraphNodeLookup(runtime.nodes),
+        clicked_start=start,
+        clicked_end=end,
+        dijkstra_node_ids=dijkstra.node_ids,
+    )
+    mid = runtime.nodes["node-mid"]
+    assert any(
+        p.latitude == pytest.approx(mid.latitude)
+        and p.longitude == pytest.approx(mid.longitude)
+        for p in route[1:-1]
+    )
+    assert dijkstra.node_ids == ["node-start", "node-mid", "node-end"]
+
+
+def test_exact_endpoint_on_node_dedupes_adjacent_duplicate(runtime):
+    node = runtime.nodes["node-start"]
+    start = (node.latitude, node.longitude)
+    end = (10.7808, 106.7172)
+    start_snap = snap_point(runtime, start[0], start[1])
+    end_snap = snap_point(runtime, end[0], end[1])
+    dijkstra = bidirectional_dijkstra(
+        runtime.adjacency, start_snap.node_id, end_snap.node_id
+    )
+    route = reconstruct_route_points(
+        GraphNodeLookup(runtime.nodes),
+        clicked_start=start,
+        clicked_end=end,
+        dijkstra_node_ids=dijkstra.node_ids,
+    )
+    assert route[0].latitude == pytest.approx(start[0])
+    assert not _has_adjacent_duplicate(route)
+
+
+def test_non_identical_snap_segment_preserved_when_offset_from_node(runtime):
+    start = (10.7785, 106.7149)
+    end = (10.7808, 106.7172)
+    start_snap = snap_point(runtime, start[0], start[1])
+    end_snap = snap_point(runtime, end[0], end[1])
+    assert start_snap.distance_meters > 0.0
+    dijkstra = bidirectional_dijkstra(
+        runtime.adjacency, start_snap.node_id, end_snap.node_id
+    )
+    route = reconstruct_route_points(
+        GraphNodeLookup(runtime.nodes),
+        clicked_start=start,
+        clicked_end=end,
+        dijkstra_node_ids=dijkstra.node_ids,
+    )
+    assert len(route) >= 3
+    assert route[0].latitude == pytest.approx(start[0])
+
+
+def test_distance_matches_independent_fixture_calculation(runtime):
+    start = (10.7785, 106.7149)
+    end = (10.7808, 106.7172)
+    start_snap = snap_point(runtime, start[0], start[1])
+    end_snap = snap_point(runtime, end[0], end[1])
+    dijkstra = bidirectional_dijkstra(
+        runtime.adjacency, start_snap.node_id, end_snap.node_id
+    )
+    distance = compute_total_distance_meters(
+        start_snap_distance_meters=start_snap.distance_meters,
+        end_snap_distance_meters=end_snap.distance_meters,
+        graph_distance_meters=dijkstra.graph_distance_meters,
+    )
+    expected = (
+        start_snap.distance_meters
+        + dijkstra.graph_distance_meters
+        + end_snap.distance_meters
+    )
+    assert distance == pytest.approx(expected, rel=1e-9, abs=1e-6)
+
+
+def test_same_snapped_node_returns_snap_only_route(runtime):
+    lat, lon = 10.77925, 106.71555
+    start = (lat, lon)
+    end = (lat + 0.00005, lon + 0.00005)
+    start_snap = snap_point(runtime, start[0], start[1])
+    end_snap = snap_point(runtime, end[0], end[1])
+    assert start_snap.node_id == end_snap.node_id == "node-mid"
+    dijkstra = bidirectional_dijkstra(
+        runtime.adjacency, start_snap.node_id, end_snap.node_id
+    )
+    assert dijkstra.node_ids == ["node-mid"]
+    assert dijkstra.graph_distance_meters == pytest.approx(0.0)
+    route = reconstruct_route_points(
+        GraphNodeLookup(runtime.nodes),
+        clicked_start=start,
+        clicked_end=end,
+        dijkstra_node_ids=dijkstra.node_ids,
+    )
+    assert route[0].latitude == pytest.approx(start[0])
+    assert route[-1].latitude == pytest.approx(end[0])
+    distance = compute_total_distance_meters(
+        start_snap.distance_meters,
+        end_snap.distance_meters,
+        dijkstra.graph_distance_meters,
+    )
+    assert distance == pytest.approx(
+        start_snap.distance_meters + end_snap.distance_meters, rel=1e-9
+    )
+    for _ in range(10):
+        again = reconstruct_route_points(
+            GraphNodeLookup(runtime.nodes),
+            clicked_start=start,
+            clicked_end=end,
+            dijkstra_node_ids=dijkstra.node_ids,
+        )
+        assert [(p.latitude, p.longitude) for p in again] == [
+            (p.latitude, p.longitude) for p in route
+        ]
+
+
+def test_dedupe_adjacent_exact_coordinates_only():
+    raw = [
+        _coord(1.0, 1.0),
+        _coord(1.0, 1.0),
+        _coord(2.0, 2.0),
+        _coord(3.0, 3.0),
+        _coord(3.0, 3.0),
+    ]
+    deduped = dedupe_adjacent_exact_coordinates(raw)
+    assert len(deduped) == 3
+    assert deduped[0].latitude == pytest.approx(1.0)
+    assert deduped[1].latitude == pytest.approx(2.0)
+    assert deduped[2].latitude == pytest.approx(3.0)
+
+
+def _has_adjacent_duplicate(route: list[RouteCoordinate]) -> bool:
+    for i in range(1, len(route)):
+        a, b = route[i - 1], route[i]
+        if (
+            abs(a.latitude - b.latitude) <= 1e-9
+            and abs(a.longitude - b.longitude) <= 1e-9
+        ):
+            return True
+    return False
+</file>
+
 <file path="backend/app/domain/tsp.py">
 from __future__ import annotations
 
@@ -5688,6 +5996,7 @@ def _try_relocate_order(
     src_stops: list[Stop],
     pickup_idx: int,
     dropoff_idx: int,
+    dst_stops: list[Stop],
     shipper_nodes: dict[str, str],
     cost_matrix: DistanceProvider,
 ) -> tuple[list[Stop], list[Stop], float] | None:
@@ -5696,9 +6005,8 @@ def _try_relocate_order(
     pickup_stop = src_stops[pickup_idx]
     dropoff_stop = src_stops[dropoff_idx]
 
-    dst_stops_placeholder: list[Stop] = []
     best_insert = _find_cheapest_insertion_in_tour(
-        dst_stops_placeholder,
+        dst_stops,
         pickup_stop,
         dropoff_stop,
         shipper_nodes[dst_sid],
@@ -5708,14 +6016,13 @@ def _try_relocate_order(
         return None
 
     src_cost = _compute_tour_distance(shipper_nodes[src_sid], src_stops, cost_matrix)
-    dst_cost = _compute_tour_distance(
-        shipper_nodes[dst_sid], dst_stops_placeholder, cost_matrix
-    )
+    dst_cost = _compute_tour_distance(shipper_nodes[dst_sid], dst_stops, cost_matrix)
     new_src_cost = _compute_tour_distance(shipper_nodes[src_sid], new_src, cost_matrix)
-    old_total = src_cost + dst_cost
-    new_total = new_src_cost + _compute_tour_distance(
+    new_dst_cost = _compute_tour_distance(
         shipper_nodes[dst_sid], best_insert, cost_matrix
     )
+    old_total = src_cost + dst_cost
+    new_total = new_src_cost + new_dst_cost
 
     if new_total < old_total:
         return new_src, best_insert, new_total
@@ -5782,7 +6089,7 @@ def _find_inter_route_relocation(
         if len(src_stops) < 2:
             continue
         relocation = _find_source_relocation(
-            src_sid, all_sids, src_stops, shipper_nodes, cost_matrix
+            src_sid, all_sids, src_stops, current, shipper_nodes, cost_matrix
         )
         if relocation is not None:
             dst_sid, new_src, new_dst = relocation
@@ -5794,6 +6101,7 @@ def _find_source_relocation(
     src_sid: str,
     all_sids: list[str],
     src_stops: list[Stop],
+    current: dict[str, list[Stop]],
     shipper_nodes: dict[str, str],
     cost_matrix: DistanceProvider,
 ) -> tuple[str, list[Stop], list[Stop]] | None:
@@ -5809,6 +6117,7 @@ def _find_source_relocation(
             src_stops,
             pickup_idx,
             dropoff_idx,
+            current,
             shipper_nodes,
             cost_matrix,
         )
@@ -5833,6 +6142,7 @@ def _attempt_relocate_to_any_dest(
     src_stops: list[Stop],
     pickup_idx: int,
     dropoff_idx: int,
+    current: dict[str, list[Stop]],
     shipper_nodes: dict[str, str],
     cost_matrix: DistanceProvider,
 ) -> tuple[list[Stop], list[Stop], str] | None:
@@ -5847,6 +6157,7 @@ def _attempt_relocate_to_any_dest(
             src_stops,
             pickup_idx,
             dropoff_idx,
+            current[dst_sid],
             shipper_nodes,
             cost_matrix,
         )
@@ -6337,315 +6648,6 @@ def _point_inside_bbox(latitude: float, longitude: float, bbox: GraphBBox) -> bo
     )
 </file>
 
-<file path="backend/tests/unit/test_route_reconstruction.py">
-from pathlib import Path
-
-import pytest
-
-from app.application.graph_runtime import build_graph_runtime
-from app.application.node_lookup import GraphNodeLookup
-from app.domain.dijkstra import bidirectional_dijkstra
-from app.domain.route_reconstruction import (
-    RouteCoordinate,
-    compute_total_distance_meters,
-    dedupe_adjacent_exact_coordinates,
-    reconstruct_route_points,
-)
-from app.application.snap_service import snap_point
-
-FIXTURE_GRAPH_PATH = (
-    Path(__file__).resolve().parents[2] / "app" / "data" / "road_graph.json"
-)
-
-
-@pytest.fixture
-def runtime():
-    return build_graph_runtime(FIXTURE_GRAPH_PATH)
-
-
-def _coord(lat: float, lon: float) -> RouteCoordinate:
-    return RouteCoordinate(latitude=lat, longitude=lon)
-
-
-def test_route_points_begin_with_clicked_start_and_end_with_clicked_end(runtime):
-    start = (10.7785, 106.7149)
-    end = (10.7808, 106.7172)
-    start_snap = snap_point(runtime, start[0], start[1])
-    end_snap = snap_point(runtime, end[0], end[1])
-    dijkstra = bidirectional_dijkstra(
-        runtime.adjacency, start_snap.node_id, end_snap.node_id
-    )
-    route = reconstruct_route_points(
-        GraphNodeLookup(runtime.nodes),
-        clicked_start=start,
-        clicked_end=end,
-        dijkstra_node_ids=dijkstra.node_ids,
-    )
-    assert route[0].latitude == pytest.approx(start[0])
-    assert route[0].longitude == pytest.approx(start[1])
-    assert route[-1].latitude == pytest.approx(end[0])
-    assert route[-1].longitude == pytest.approx(end[1])
-
-
-def test_intermediate_points_follow_dijkstra_node_order(runtime):
-    start = (10.7785, 106.7149)
-    end = (10.7808, 106.7172)
-    start_snap = snap_point(runtime, start[0], start[1])
-    end_snap = snap_point(runtime, end[0], end[1])
-    dijkstra = bidirectional_dijkstra(
-        runtime.adjacency, start_snap.node_id, end_snap.node_id
-    )
-    route = reconstruct_route_points(
-        GraphNodeLookup(runtime.nodes),
-        clicked_start=start,
-        clicked_end=end,
-        dijkstra_node_ids=dijkstra.node_ids,
-    )
-    mid = runtime.nodes["node-mid"]
-    assert any(
-        p.latitude == pytest.approx(mid.latitude)
-        and p.longitude == pytest.approx(mid.longitude)
-        for p in route[1:-1]
-    )
-    assert dijkstra.node_ids == ["node-start", "node-mid", "node-end"]
-
-
-def test_exact_endpoint_on_node_dedupes_adjacent_duplicate(runtime):
-    node = runtime.nodes["node-start"]
-    start = (node.latitude, node.longitude)
-    end = (10.7808, 106.7172)
-    start_snap = snap_point(runtime, start[0], start[1])
-    end_snap = snap_point(runtime, end[0], end[1])
-    dijkstra = bidirectional_dijkstra(
-        runtime.adjacency, start_snap.node_id, end_snap.node_id
-    )
-    route = reconstruct_route_points(
-        GraphNodeLookup(runtime.nodes),
-        clicked_start=start,
-        clicked_end=end,
-        dijkstra_node_ids=dijkstra.node_ids,
-    )
-    assert route[0].latitude == pytest.approx(start[0])
-    assert not _has_adjacent_duplicate(route)
-
-
-def test_non_identical_snap_segment_preserved_when_offset_from_node(runtime):
-    start = (10.7785, 106.7149)
-    end = (10.7808, 106.7172)
-    start_snap = snap_point(runtime, start[0], start[1])
-    end_snap = snap_point(runtime, end[0], end[1])
-    assert start_snap.distance_meters > 0.0
-    dijkstra = bidirectional_dijkstra(
-        runtime.adjacency, start_snap.node_id, end_snap.node_id
-    )
-    route = reconstruct_route_points(
-        GraphNodeLookup(runtime.nodes),
-        clicked_start=start,
-        clicked_end=end,
-        dijkstra_node_ids=dijkstra.node_ids,
-    )
-    assert len(route) >= 3
-    assert route[0].latitude == pytest.approx(start[0])
-
-
-def test_distance_matches_independent_fixture_calculation(runtime):
-    start = (10.7785, 106.7149)
-    end = (10.7808, 106.7172)
-    start_snap = snap_point(runtime, start[0], start[1])
-    end_snap = snap_point(runtime, end[0], end[1])
-    dijkstra = bidirectional_dijkstra(
-        runtime.adjacency, start_snap.node_id, end_snap.node_id
-    )
-    distance = compute_total_distance_meters(
-        start_snap_distance_meters=start_snap.distance_meters,
-        end_snap_distance_meters=end_snap.distance_meters,
-        graph_distance_meters=dijkstra.graph_distance_meters,
-    )
-    expected = (
-        start_snap.distance_meters
-        + dijkstra.graph_distance_meters
-        + end_snap.distance_meters
-    )
-    assert distance == pytest.approx(expected, rel=1e-9, abs=1e-6)
-
-
-def test_same_snapped_node_returns_snap_only_route(runtime):
-    lat, lon = 10.77925, 106.71555
-    start = (lat, lon)
-    end = (lat + 0.00005, lon + 0.00005)
-    start_snap = snap_point(runtime, start[0], start[1])
-    end_snap = snap_point(runtime, end[0], end[1])
-    assert start_snap.node_id == end_snap.node_id == "node-mid"
-    dijkstra = bidirectional_dijkstra(
-        runtime.adjacency, start_snap.node_id, end_snap.node_id
-    )
-    assert dijkstra.node_ids == ["node-mid"]
-    assert dijkstra.graph_distance_meters == pytest.approx(0.0)
-    route = reconstruct_route_points(
-        GraphNodeLookup(runtime.nodes),
-        clicked_start=start,
-        clicked_end=end,
-        dijkstra_node_ids=dijkstra.node_ids,
-    )
-    assert route[0].latitude == pytest.approx(start[0])
-    assert route[-1].latitude == pytest.approx(end[0])
-    distance = compute_total_distance_meters(
-        start_snap.distance_meters,
-        end_snap.distance_meters,
-        dijkstra.graph_distance_meters,
-    )
-    assert distance == pytest.approx(
-        start_snap.distance_meters + end_snap.distance_meters, rel=1e-9
-    )
-    for _ in range(10):
-        again = reconstruct_route_points(
-            GraphNodeLookup(runtime.nodes),
-            clicked_start=start,
-            clicked_end=end,
-            dijkstra_node_ids=dijkstra.node_ids,
-        )
-        assert [(p.latitude, p.longitude) for p in again] == [
-            (p.latitude, p.longitude) for p in route
-        ]
-
-
-def test_dedupe_adjacent_exact_coordinates_only():
-    raw = [
-        _coord(1.0, 1.0),
-        _coord(1.0, 1.0),
-        _coord(2.0, 2.0),
-        _coord(3.0, 3.0),
-        _coord(3.0, 3.0),
-    ]
-    deduped = dedupe_adjacent_exact_coordinates(raw)
-    assert len(deduped) == 3
-    assert deduped[0].latitude == pytest.approx(1.0)
-    assert deduped[1].latitude == pytest.approx(2.0)
-    assert deduped[2].latitude == pytest.approx(3.0)
-
-
-def _has_adjacent_duplicate(route: list[RouteCoordinate]) -> bool:
-    for i in range(1, len(route)):
-        a, b = route[i - 1], route[i]
-        if (
-            abs(a.latitude - b.latitude) <= 1e-9
-            and abs(a.longitude - b.longitude) <= 1e-9
-        ):
-            return True
-    return False
-</file>
-
-<file path="backend/app/models/route_models.py">
-from pydantic import BaseModel, Field
-
-from app.models.point import Point
-
-
-class RoutingOptionsRequest(BaseModel):
-    avoid_road_types: list[str] = Field(default_factory=list)
-    avoid_edge_ids: list[str] = Field(default_factory=list)
-    # Solver thresholds. None (or omitted) means "use the server default".
-    # 0 disables the brute-force path entirely (always heuristic).
-    tsp_brute_force_max_stops: int | None = Field(default=None, ge=0)
-    vrp_brute_force_max_orders: int | None = Field(default=None, ge=0)
-    vrp_brute_force_max_shippers: int | None = Field(default=None, ge=0)
-
-
-class GraphBoundsResponse(BaseModel):
-    bbox: dict[str, float]
-    # Informational metadata from the graph file; snap_service does not enforce this.
-    max_snap_distance_meters: float
-    graph_version: str
-
-
-class RouteRequest(BaseModel):
-    """POST /route request body."""
-    start: Point
-    end: Point
-    options: RoutingOptionsRequest = Field(default_factory=RoutingOptionsRequest)
-
-
-class RouteResponse(BaseModel):
-    """POST /route response body."""
-    route_points: list[Point]
-    distance: float = Field(ge=0)
-
-
-# --- Phase 2: Assignment & Tour DTOs ---
-
-
-class OrderRequest(BaseModel):
-    id: str
-    pickup: Point
-    dropoff: Point
-
-
-class ShipperRequest(BaseModel):
-    id: str
-    location: Point
-
-
-class LegResponse(BaseModel):
-    kind: str
-    distance_meters: float
-    route_points: list[Point]
-
-
-class ShipperRouteResponse(BaseModel):
-    shipper_id: str
-    feasible: bool
-    total_distance_meters: float
-    legs: list[LegResponse]
-
-
-class AssignmentRequest(BaseModel):
-    order: OrderRequest
-    shippers: list[ShipperRequest]
-    options: RoutingOptionsRequest = Field(default_factory=RoutingOptionsRequest)
-
-
-class AssignmentResponse(BaseModel):
-    recommended_shipper_id: str | None
-    ranking: list[ShipperRouteResponse]
-
-
-class StopResponse(BaseModel):
-    order_id: str
-    kind: str
-    coordinate: Point
-
-
-class TourRequest(BaseModel):
-    shipper: ShipperRequest
-    orders: list[OrderRequest]
-    options: RoutingOptionsRequest = Field(default_factory=RoutingOptionsRequest)
-
-
-class TourResponse(BaseModel):
-    shipper_id: str
-    ordered_stops: list[StopResponse]
-    legs: list[LegResponse]
-    total_distance_meters: float
-    optimal: bool
-    feasible: bool = True
-
-
-# --- Phase 3: VRP Fleet DTOs ---
-
-
-class FleetRequest(BaseModel):
-    shippers: list[ShipperRequest]
-    orders: list[OrderRequest]
-    options: RoutingOptionsRequest = Field(default_factory=RoutingOptionsRequest)
-
-
-class FleetResponse(BaseModel):
-    tours: list[TourResponse]
-    unassigned_order_ids: list[str]
-    total_distance_meters: float
-    optimal: bool
-</file>
-
 <file path="backend/app/main.py">
 import os
 from contextlib import asynccontextmanager
@@ -6842,6 +6844,117 @@ PointList.propTypes = {
   onRemoveOrder: PropTypes.func.isRequired,
   onRemoveShipper: PropTypes.func.isRequired,
 };
+</file>
+
+<file path="backend/app/models/route_models.py">
+from pydantic import BaseModel, Field
+
+from app.models.point import Point
+
+
+class RoutingOptionsRequest(BaseModel):
+    avoid_road_types: list[str] = Field(default_factory=list)
+    avoid_edge_ids: list[str] = Field(default_factory=list)
+    # Solver thresholds. None (or omitted) means "use the server default".
+    # 0 disables the brute-force path entirely (always heuristic).
+    tsp_brute_force_max_stops: int | None = Field(default=None, ge=0)
+    vrp_brute_force_max_orders: int | None = Field(default=None, ge=0)
+    vrp_brute_force_max_shippers: int | None = Field(default=None, ge=0)
+
+
+class GraphBoundsResponse(BaseModel):
+    bbox: dict[str, float]
+    # Informational metadata from the graph file; snap_service does not enforce this.
+    max_snap_distance_meters: float
+    graph_version: str
+
+
+class RouteRequest(BaseModel):
+    """POST /route request body."""
+    start: Point
+    end: Point
+    options: RoutingOptionsRequest = Field(default_factory=RoutingOptionsRequest)
+
+
+class RouteResponse(BaseModel):
+    """POST /route response body."""
+    route_points: list[Point]
+    distance: float = Field(ge=0)
+
+
+# --- Phase 2: Assignment & Tour DTOs ---
+
+
+class OrderRequest(BaseModel):
+    id: str
+    pickup: Point
+    dropoff: Point
+
+
+class ShipperRequest(BaseModel):
+    id: str
+    location: Point
+
+
+class LegResponse(BaseModel):
+    kind: str
+    distance_meters: float
+    route_points: list[Point]
+
+
+class ShipperRouteResponse(BaseModel):
+    shipper_id: str
+    feasible: bool
+    total_distance_meters: float
+    legs: list[LegResponse]
+
+
+class AssignmentRequest(BaseModel):
+    order: OrderRequest
+    shippers: list[ShipperRequest]
+    options: RoutingOptionsRequest = Field(default_factory=RoutingOptionsRequest)
+
+
+class AssignmentResponse(BaseModel):
+    recommended_shipper_id: str | None
+    ranking: list[ShipperRouteResponse]
+
+
+class StopResponse(BaseModel):
+    order_id: str
+    kind: str
+    coordinate: Point
+
+
+class TourRequest(BaseModel):
+    shipper: ShipperRequest
+    orders: list[OrderRequest]
+    options: RoutingOptionsRequest = Field(default_factory=RoutingOptionsRequest)
+
+
+class TourResponse(BaseModel):
+    shipper_id: str
+    ordered_stops: list[StopResponse]
+    legs: list[LegResponse]
+    total_distance_meters: float
+    optimal: bool
+    feasible: bool = True
+
+
+# --- Phase 3: VRP Fleet DTOs ---
+
+
+class FleetRequest(BaseModel):
+    shippers: list[ShipperRequest]
+    orders: list[OrderRequest]
+    options: RoutingOptionsRequest = Field(default_factory=RoutingOptionsRequest)
+
+
+class FleetResponse(BaseModel):
+    tours: list[TourResponse]
+    unassigned_order_ids: list[str]
+    total_distance_meters: float
+    optimal: bool
 </file>
 
 <file path="frontend/src/App.jsx">

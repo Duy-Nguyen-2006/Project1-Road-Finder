@@ -39,6 +39,8 @@ def _assignment_total_distance(
     shipper_snap = snap_context.shipper_snap_distances[shipper_id]
     pickup_snap = snap_context.pickup_snap_distance
     dropoff_snap = snap_context.dropoff_snap_distance
+    # pickup_snap appears twice: snap onto the road at pickup (leg 1 end)
+    # and snap off the road at pickup (leg 2 start), matching assignment legs.
     return (
         shipper_snap
         + dist_to_pickup

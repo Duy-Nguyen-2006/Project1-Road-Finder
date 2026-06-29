@@ -182,6 +182,7 @@ def _try_relocate_order(
     src_stops: list[Stop],
     pickup_idx: int,
     dropoff_idx: int,
+    dst_stops: list[Stop],
     shipper_nodes: dict[str, str],
     cost_matrix: DistanceProvider,
 ) -> tuple[list[Stop], list[Stop], float] | None:
@@ -190,9 +191,8 @@ def _try_relocate_order(
     pickup_stop = src_stops[pickup_idx]
     dropoff_stop = src_stops[dropoff_idx]
 
-    dst_stops_placeholder: list[Stop] = []
     best_insert = _find_cheapest_insertion_in_tour(
-        dst_stops_placeholder,
+        dst_stops,
         pickup_stop,
         dropoff_stop,
         shipper_nodes[dst_sid],
@@ -202,14 +202,13 @@ def _try_relocate_order(
         return None
 
     src_cost = _compute_tour_distance(shipper_nodes[src_sid], src_stops, cost_matrix)
-    dst_cost = _compute_tour_distance(
-        shipper_nodes[dst_sid], dst_stops_placeholder, cost_matrix
-    )
+    dst_cost = _compute_tour_distance(shipper_nodes[dst_sid], dst_stops, cost_matrix)
     new_src_cost = _compute_tour_distance(shipper_nodes[src_sid], new_src, cost_matrix)
-    old_total = src_cost + dst_cost
-    new_total = new_src_cost + _compute_tour_distance(
+    new_dst_cost = _compute_tour_distance(
         shipper_nodes[dst_sid], best_insert, cost_matrix
     )
+    old_total = src_cost + dst_cost
+    new_total = new_src_cost + new_dst_cost
 
     if new_total < old_total:
         return new_src, best_insert, new_total
@@ -276,7 +275,7 @@ def _find_inter_route_relocation(
         if len(src_stops) < 2:
             continue
         relocation = _find_source_relocation(
-            src_sid, all_sids, src_stops, shipper_nodes, cost_matrix
+            src_sid, all_sids, src_stops, current, shipper_nodes, cost_matrix
         )
         if relocation is not None:
             dst_sid, new_src, new_dst = relocation
@@ -288,6 +287,7 @@ def _find_source_relocation(
     src_sid: str,
     all_sids: list[str],
     src_stops: list[Stop],
+    current: dict[str, list[Stop]],
     shipper_nodes: dict[str, str],
     cost_matrix: DistanceProvider,
 ) -> tuple[str, list[Stop], list[Stop]] | None:
@@ -303,6 +303,7 @@ def _find_source_relocation(
             src_stops,
             pickup_idx,
             dropoff_idx,
+            current,
             shipper_nodes,
             cost_matrix,
         )
@@ -327,6 +328,7 @@ def _attempt_relocate_to_any_dest(
     src_stops: list[Stop],
     pickup_idx: int,
     dropoff_idx: int,
+    current: dict[str, list[Stop]],
     shipper_nodes: dict[str, str],
     cost_matrix: DistanceProvider,
 ) -> tuple[list[Stop], list[Stop], str] | None:
@@ -341,6 +343,7 @@ def _attempt_relocate_to_any_dest(
             src_stops,
             pickup_idx,
             dropoff_idx,
+            current[dst_sid],
             shipper_nodes,
             cost_matrix,
         )
