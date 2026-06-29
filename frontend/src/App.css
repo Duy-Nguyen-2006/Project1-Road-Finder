@@ -120,6 +120,71 @@ button, input, textarea, select {
   min-height: 70vh;
 }
 
+.map-panel {
+  position: relative;
+}
+
+.map-auth-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  background: rgba(2, 9, 58, 0.55);
+  color: var(--color-pure-white);
+  text-align: center;
+  pointer-events: none;
+  z-index: 500;
+}
+
+.auth-gate-card {
+  border: 1px solid var(--color-faint-line);
+}
+
+.scenario-panel .scenario-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.scenario-panel input {
+  border: 1px solid var(--color-faint-line);
+  border-radius: var(--radius);
+  padding: 0.5rem 0.625rem;
+  min-width: 0;
+}
+
+.scenario-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.scenario-list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.link-button {
+  border: none;
+  background: transparent;
+  color: var(--color-signal-blue);
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+  font-weight: 500;
+}
+
+.link-button:hover {
+  text-decoration: underline;
+}
+
 /* Map */
 .map-container {
   width: 100%;

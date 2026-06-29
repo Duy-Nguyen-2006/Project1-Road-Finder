@@ -1,6 +1,9 @@
-from fastapi import APIRouter, Request
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Request
 
 from app.application.cost_matrix import CostMatrix
+from app.auth.dependencies import require_current_user
 from app.application.graph_bounds import build_graph_bounds_payload
 from app.application.health import build_health_payload
 from app.domain.assignment import AssignmentSnapContext, rank_shippers_for_order
@@ -33,6 +36,8 @@ from app.services.tour_response_builder import (
 
 router = APIRouter()
 
+AuthenticatedUser = Annotated[dict, Depends(require_current_user)]
+
 
 def _runtime(request: Request):
     return request.app.state.graph_runtime
@@ -60,7 +65,11 @@ def graph_bounds(request: Request) -> GraphBoundsResponse:
 
 
 @router.post("/route")
-def route(request: Request, body: RouteRequest) -> RouteResponse:
+def route(
+    request: Request,
+    body: RouteRequest,
+    _user: AuthenticatedUser,
+) -> RouteResponse:
     options = _to_routing_options(body.options)
     try:
         result = compute_shortest_path_response(
@@ -75,7 +84,11 @@ def route(request: Request, body: RouteRequest) -> RouteResponse:
 
 
 @router.post("/assignments")
-def assignments(request: Request, body: AssignmentRequest) -> AssignmentResponse:
+def assignments(
+    request: Request,
+    body: AssignmentRequest,
+    _user: AuthenticatedUser,
+) -> AssignmentResponse:
     runtime = _runtime(request)
     options = _to_routing_options(body.options)
 
@@ -164,7 +177,11 @@ def assignments(request: Request, body: AssignmentRequest) -> AssignmentResponse
 
 
 @router.post("/tours")
-def tours(request: Request, body: TourRequest) -> TourResponse:
+def tours(
+    request: Request,
+    body: TourRequest,
+    _user: AuthenticatedUser,
+) -> TourResponse:
     runtime = _runtime(request)
     options = _to_routing_options(body.options)
 
@@ -230,7 +247,11 @@ def tours(request: Request, body: TourRequest) -> TourResponse:
 
 
 @router.post("/fleet")
-def fleet(request: Request, body: FleetRequest) -> FleetResponse:
+def fleet(
+    request: Request,
+    body: FleetRequest,
+    _user: AuthenticatedUser,
+) -> FleetResponse:
     runtime = _runtime(request)
     options = _to_routing_options(body.options)
 

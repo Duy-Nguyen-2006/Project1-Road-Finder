@@ -22,15 +22,29 @@ def _block_external_http(*_args, **_kwargs):
     raise ExternalHttpBlocked("external HTTP is blocked for MVP runtime tests")
 
 
+TEST_AUTH_HEADER = {"Authorization": "Bearer test-token"}
+
+
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setenv("ROAD_FINDER_GRAPH_PATH", str(FIXTURE_GRAPH_PATH))
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
     monkeypatch.setattr(requests, "get", _block_external_http)
     monkeypatch.setattr(requests, "post", _block_external_http)
     from app.main import create_app
 
-    with TestClient(create_app()) as c:
-        yield c
+    with TestClient(create_app()) as test_client:
+        original_request = test_client.request
+
+        def authed_request(method, url, **kwargs):
+            headers = dict(kwargs.pop("headers", None) or {})
+            if "Authorization" not in headers:
+                headers.update(TEST_AUTH_HEADER)
+            kwargs["headers"] = headers
+            return original_request(method, url, **kwargs)
+
+        test_client.request = authed_request
+        yield test_client
 
 
 def test_health_graph_bounds_and_routes_without_external_http(client):

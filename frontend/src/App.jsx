@@ -1,6 +1,8 @@
 import React, { useCallback, useMemo } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import AuthPanel from "./components/AuthPanel";
+import ScenarioPanel from "./components/ScenarioPanel";
+import { useAuth } from "./hooks/useAuth";
 import MapView from "./components/MapView";
 import ModeSwitcher from "./components/ModeSwitcher";
 import OptionsPanel from "./components/OptionsPanel";
@@ -24,7 +26,13 @@ import {
   getShipperColor,
 } from "./hooks/useVrpState";
 
+const AUTH_REQUIRED_MESSAGE = "Vui lòng đăng nhập Google để tối ưu quãng đường.";
+
 export default function App() {
+  const { configured: authConfigured, loading: authLoading, user } = useAuth();
+  const isAuthenticated = Boolean(user);
+  const canUseVrp = !authConfigured || isAuthenticated;
+
   const {
     placementMode,
     setPlacementMode,
@@ -52,6 +60,8 @@ export default function App() {
     beginRequest,
     completeRequest,
     failRequest,
+    getScenarioSnapshot,
+    loadScenario,
   } = useVrpState();
 
   const boundsQuery = useQuery({
@@ -73,13 +83,23 @@ export default function App() {
       completeRequest(data);
     },
     onError: (error) => {
-      failRequest(error?.message || "Có lỗi xảy ra khi tối ưu.");
+      const message = error?.message || "Có lỗi xảy ra khi tối ưu.";
+      if (message.includes("Thiếu token") || message.includes("401")) {
+        failRequest(AUTH_REQUIRED_MESSAGE);
+        return;
+      }
+      failRequest(message);
     },
   });
 
   const handleMapClick = useCallback(
     (rawPoint) => {
-      if (!boundsLoaded) return;
+      if (!boundsLoaded || !canUseVrp) {
+        if (!canUseVrp && authConfigured) {
+          failRequest(AUTH_REQUIRED_MESSAGE);
+        }
+        return;
+      }
       const candidate = {
         latitude: rawPoint.lat,
         longitude: rawPoint.lng,
@@ -101,6 +121,8 @@ export default function App() {
     },
     [
       boundsLoaded,
+      canUseVrp,
+      authConfigured,
       bbox,
       placementMode,
       pendingPickup,
@@ -112,6 +134,10 @@ export default function App() {
   );
 
   const handleOptimize = useCallback(() => {
+    if (!canUseVrp) {
+      failRequest(AUTH_REQUIRED_MESSAGE);
+      return;
+    }
     if (!canOptimize) return;
     const shipper = shippers.find((s) => s.id === selectedShipperId);
     if (!shipper) return;
@@ -136,6 +162,7 @@ export default function App() {
       },
     });
   }, [
+    canUseVrp,
     canOptimize,
     mutation,
     shippers,
@@ -156,6 +183,9 @@ export default function App() {
   );
 
   const statusText = useMemo(() => {
+    if (authConfigured && !authLoading && !isAuthenticated) {
+      return AUTH_REQUIRED_MESSAGE;
+    }
     if (!boundsLoaded) return "Đang tải vùng hỗ trợ...";
     if (status === VRP_STATUS.LOADING) return "Đang tối ưu quãng đường...";
     if (status === VRP_STATUS.ERROR) return errorMessage;
@@ -163,7 +193,16 @@ export default function App() {
       return `${getShipperGlyph(tourResult.shipper_id)}: ${formatDistance(tourResult.total_distance_meters)} (${selectedOrderIds.length} đơn)`;
     }
     return "Chọn shipper, tick đơn cần giao, rồi bấm \"Tối ưu quãng đường\".";
-  }, [boundsLoaded, status, errorMessage, tourResult, selectedOrderIds.length]);
+  }, [
+    authConfigured,
+    authLoading,
+    isAuthenticated,
+    boundsLoaded,
+    status,
+    errorMessage,
+    tourResult,
+    selectedOrderIds.length,
+  ]);
 
   const shipperColorMap = useMemo(() => {
     const map = {};
@@ -202,12 +241,24 @@ export default function App() {
             selectedShipperId={selectedShipperId}
             selectedOrderIds={selectedOrderIds}
             shipperColorMap={shipperColorMap}
-            selectionEnabled={boundsLoaded}
+            selectionEnabled={boundsLoaded && canUseVrp}
             onAddPoint={handleMapClick}
           />
+          {!canUseVrp && authConfigured && !authLoading ? (
+            <div className="map-auth-overlay">
+              <p>Đăng nhập Google để thêm điểm và tối ưu quãng đường.</p>
+            </div>
+          ) : null}
         </section>
 
         <aside className="side-panel">
+          <ScenarioPanel
+            user={user}
+            scenarioSnapshot={getScenarioSnapshot}
+            onLoadScenario={loadScenario}
+            onAddPresetShipper={addShipper}
+          />
+
           <ModeSwitcher
             placementMode={placementMode}
             onPlacementModeChange={handlePlacementModeChange}
@@ -227,7 +278,7 @@ export default function App() {
             selectedOrderIds={selectedOrderIds}
             shipperColorMap={shipperColorMap}
             status={status}
-            canOptimize={canOptimize}
+            canOptimize={canOptimize && canUseVrp}
             onSelectShipper={selectShipper}
             onToggleOrder={toggleOrderSelection}
             onOptimize={handleOptimize}

@@ -1,23 +1,7 @@
-from pathlib import Path
-
 import pytest
-from fastapi.testclient import TestClient
-
-FIXTURE_GRAPH_PATH = (
-    Path(__file__).resolve().parents[2] / "app" / "data" / "road_graph.json"
-)
 
 VALID_START = {"latitude": 10.7785, "longitude": 106.7149}
 VALID_END = {"latitude": 10.7808, "longitude": 106.7172}
-
-
-@pytest.fixture
-def client(monkeypatch):
-    monkeypatch.setenv("ROAD_FINDER_GRAPH_PATH", str(FIXTURE_GRAPH_PATH))
-    from app.main import create_app
-
-    with TestClient(create_app()) as c:
-        yield c
 
 
 def test_graph_bounds_returns_metadata(client):

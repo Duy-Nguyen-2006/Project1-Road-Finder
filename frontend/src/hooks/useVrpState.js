@@ -35,6 +35,22 @@ export function getShipperColor(index) {
 let _nextShipperId = 1;
 let _nextOrderId = 1;
 
+function _maxIdNumber(items, prefix) {
+  let max = 0;
+  for (const item of items) {
+    const match = item.id?.match(new RegExp(String.raw`^${prefix}(\d+)$`));
+    if (match) {
+      max = Math.max(max, Number.parseInt(match[1], 10));
+    }
+  }
+  return max;
+}
+
+function syncIdCounters(orders, shippers) {
+  _nextOrderId = _maxIdNumber(orders, "o") + 1;
+  _nextShipperId = _maxIdNumber(shippers, "s") + 1;
+}
+
 function clearTourOnEdit(setTourResult, setStatus, setErrorMessage) {
   setTourResult(null);
   setStatus(VRP_STATUS.IDLE);
@@ -147,6 +163,34 @@ export function useVrpState() {
     setErrorMessage(message || "Có lỗi xảy ra.");
   }, []);
 
+  const getScenarioSnapshot = useCallback(
+    () => ({
+      orders,
+      shippers,
+      selectedShipperId,
+      selectedOrderIds,
+      avoidRoadTypes,
+    }),
+    [orders, shippers, selectedShipperId, selectedOrderIds, avoidRoadTypes]
+  );
+
+  const loadScenario = useCallback((payload) => {
+    const nextOrders = payload?.orders ?? [];
+    const nextShippers = payload?.shippers ?? [];
+    syncIdCounters(nextOrders, nextShippers);
+    setOrders(nextOrders);
+    setShippers(nextShippers);
+    setSelectedShipperId(
+      payload?.selectedShipperId ?? nextShippers[0]?.id ?? null
+    );
+    setSelectedOrderIds(payload?.selectedOrderIds ?? []);
+    setAvoidRoadTypes(payload?.avoidRoadTypes ?? []);
+    setPendingPickup(null);
+    setTourResult(null);
+    setStatus(VRP_STATUS.IDLE);
+    setErrorMessage("");
+  }, []);
+
   const canOptimize =
     Boolean(selectedShipperId) &&
     selectedOrderIds.length > 0 &&
@@ -183,5 +227,7 @@ export function useVrpState() {
     beginRequest,
     completeRequest,
     failRequest,
+    getScenarioSnapshot,
+    loadScenario,
   };
 }
