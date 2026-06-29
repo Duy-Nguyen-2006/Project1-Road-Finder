@@ -3,18 +3,21 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import MapView from "./components/MapView";
 import ModeSwitcher from "./components/ModeSwitcher";
 import OptionsPanel from "./components/OptionsPanel";
-import FleetResultPanel from "./components/FleetResultPanel";
+import ShipperAssignmentPanel from "./components/ShipperAssignmentPanel";
+import TourResultPanel from "./components/TourResultPanel";
 import PointList from "./components/PointList";
 import {
   ACCEPTED_AREA_DETAIL,
   getGraphBounds,
-  postFleet,
+  postTours,
+  API_BASE_URL,
 } from "./api/routeApi";
 import { isInsideBbox } from "./utils/geo";
 import { formatDistance } from "./utils/format";
+import { getOrderLabel } from "./utils/orders";
+import { getShipperGlyph, getShipperLabel } from "./utils/shippers";
 import {
   PLACEMENT_MODE,
-  ORDER_STEP,
   VRP_STATUS,
   useVrpState,
   getShipperColor,
@@ -25,21 +28,26 @@ export default function App() {
     placementMode,
     setPlacementMode,
     orderStep,
+    pendingPickup,
     orders,
     shippers,
-    pendingPickup,
-    fleetResult,
+    selectedShipperId,
+    selectedOrderIds,
+    tourResult,
     status,
     errorMessage,
     avoidRoadTypes,
     setAvoidRoadTypes,
     canOptimize,
-    addPickup,
-    addDropoff,
+    setPickupForNewOrder,
+    setDropoffForPendingOrder,
+    cancelPendingPickup,
     addShipper,
     removeOrder,
     removeShipper,
     clearAll,
+    selectShipper,
+    toggleOrderSelection,
     beginRequest,
     completeRequest,
     failRequest,
@@ -56,7 +64,7 @@ export default function App() {
   const bbox = boundsLoaded ? boundsQuery.data.bbox : null;
 
   const mutation = useMutation({
-    mutationFn: postFleet,
+    mutationFn: postTours,
     onMutate: () => {
       beginRequest();
     },
@@ -81,26 +89,42 @@ export default function App() {
       }
 
       if (placementMode === PLACEMENT_MODE.ORDER) {
-        if (orderStep === ORDER_STEP.PICKUP) {
-          addPickup(candidate);
+        if (pendingPickup) {
+          setDropoffForPendingOrder(candidate);
         } else {
-          addDropoff(candidate);
+          setPickupForNewOrder(candidate);
         }
       } else {
         addShipper(candidate);
       }
     },
-    [boundsLoaded, bbox, placementMode, orderStep, addPickup, addDropoff, addShipper, failRequest]
+    [
+      boundsLoaded,
+      bbox,
+      placementMode,
+      pendingPickup,
+      setPickupForNewOrder,
+      setDropoffForPendingOrder,
+      addShipper,
+      failRequest,
+    ]
   );
 
   const handleOptimize = useCallback(() => {
     if (!canOptimize) return;
+    const shipper = shippers.find((s) => s.id === selectedShipperId);
+    if (!shipper) return;
+
+    const assignedOrders = orders.filter((o) =>
+      selectedOrderIds.includes(o.id)
+    );
+
     mutation.mutate({
-      shippers: shippers.map((s) => ({
-        id: s.id,
-        location: s.location,
-      })),
-      orders: orders.map((o) => ({
+      shipper: {
+        id: shipper.id,
+        location: shipper.location,
+      },
+      orders: assignedOrders.map((o) => ({
         id: o.id,
         pickup: o.pickup,
         dropoff: o.dropoff,
@@ -110,19 +134,36 @@ export default function App() {
         avoid_edge_ids: [],
       },
     });
-  }, [canOptimize, mutation, shippers, orders, avoidRoadTypes]);
+  }, [
+    canOptimize,
+    mutation,
+    shippers,
+    selectedShipperId,
+    orders,
+    selectedOrderIds,
+    avoidRoadTypes,
+  ]);
+
+  const handlePlacementModeChange = useCallback(
+    (mode) => {
+      if (mode !== PLACEMENT_MODE.ORDER && pendingPickup) {
+        cancelPendingPickup();
+      }
+      setPlacementMode(mode);
+    },
+    [pendingPickup, cancelPendingPickup, setPlacementMode]
+  );
 
   const statusText = useMemo(() => {
     if (!boundsLoaded) return "Đang tải vùng hỗ trợ...";
-    if (status === VRP_STATUS.LOADING) return "Đang tối ưu...";
+    if (status === VRP_STATUS.LOADING) return "Đang tối ưu quãng đường...";
     if (status === VRP_STATUS.ERROR) return errorMessage;
-    if (status === VRP_STATUS.SUCCESS && fleetResult) {
-      return `Tổng quãng đường đội: ${formatDistance(fleetResult.total_distance_meters)}`;
+    if (status === VRP_STATUS.SUCCESS && tourResult) {
+      return `${getShipperGlyph(tourResult.shipper_id)}: ${formatDistance(tourResult.total_distance_meters)} (${selectedOrderIds.length} đơn)`;
     }
-    return "Chọn đơn hàng và shipper, sau đó bấm \"Tối ưu đội\".";
-  }, [boundsLoaded, status, errorMessage, fleetResult]);
+    return "Chọn shipper, tick đơn cần giao, rồi bấm \"Tối ưu quãng đường\".";
+  }, [boundsLoaded, status, errorMessage, tourResult, selectedOrderIds.length]);
 
-  // Shipper color mapping
   const shipperColorMap = useMemo(() => {
     const map = {};
     shippers.forEach((s, i) => {
@@ -131,11 +172,19 @@ export default function App() {
     return map;
   }, [shippers]);
 
+  const selectedOrderLabels = useMemo(
+    () => selectedOrderIds.map((id) => getOrderLabel(id)).join(", "),
+    [selectedOrderIds]
+  );
+
   return (
     <div className="app-shell">
       <header className="app-header">
         <h1>VRP Delivery Routing</h1>
-        <p>Tối ưu giao vận đa-shipper. Chọn đơn hàng và shipper trên bản đồ.</p>
+        <p>
+          Mỗi đơn P1→D1, P2→D2… mỗi shipper S1, S2… Chọn shipper, tick đơn
+          cần giao, bấm tối ưu để xem quãng đường.
+        </p>
       </header>
 
       <main className="app-content">
@@ -145,19 +194,21 @@ export default function App() {
             orders={orders}
             shippers={shippers}
             pendingPickup={pendingPickup}
-            fleetResult={fleetResult}
+            tourResult={tourResult}
+            selectedShipperId={selectedShipperId}
+            selectedOrderIds={selectedOrderIds}
             shipperColorMap={shipperColorMap}
             selectionEnabled={boundsLoaded}
             onAddPoint={handleMapClick}
-            placementMode={placementMode}
           />
         </section>
 
         <aside className="side-panel">
           <ModeSwitcher
             placementMode={placementMode}
-            onPlacementModeChange={setPlacementMode}
+            onPlacementModeChange={handlePlacementModeChange}
             orderStep={orderStep}
+            onCancelPendingPickup={cancelPendingPickup}
           />
 
           <OptionsPanel
@@ -165,15 +216,20 @@ export default function App() {
             onAvoidRoadTypesChange={setAvoidRoadTypes}
           />
 
+          <ShipperAssignmentPanel
+            shippers={shippers}
+            orders={orders}
+            selectedShipperId={selectedShipperId}
+            selectedOrderIds={selectedOrderIds}
+            shipperColorMap={shipperColorMap}
+            status={status}
+            canOptimize={canOptimize}
+            onSelectShipper={selectShipper}
+            onToggleOrder={toggleOrderSelection}
+            onOptimize={handleOptimize}
+          />
+
           <div className="panel-card controls-card">
-            <button
-              className="primary-button"
-              onClick={handleOptimize}
-              disabled={!canOptimize}
-              type="button"
-            >
-              {status === VRP_STATUS.LOADING ? "Đang tối ưu..." : "Tối ưu đội"}
-            </button>
             <button
               className="secondary-button"
               onClick={clearAll}
@@ -188,13 +244,15 @@ export default function App() {
             orders={orders}
             shippers={shippers}
             shipperColorMap={shipperColorMap}
+            selectedOrderIds={selectedOrderIds}
             onRemoveOrder={removeOrder}
             onRemoveShipper={removeShipper}
           />
 
-          {status === VRP_STATUS.SUCCESS && fleetResult ? (
-            <FleetResultPanel
-              fleetResult={fleetResult}
+          {status === VRP_STATUS.SUCCESS && tourResult ? (
+            <TourResultPanel
+              tourResult={tourResult}
+              orders={orders}
               shipperColorMap={shipperColorMap}
             />
           ) : (
@@ -206,6 +264,15 @@ export default function App() {
                 }
               >
                 {statusText}
+              </p>
+              {selectedShipperId && selectedOrderIds.length > 0 && (
+                <p className="helper-text">
+                  {getShipperGlyph(selectedShipperId)} ({getShipperLabel(selectedShipperId)})
+                  {" "}nhận: {selectedOrderLabels}
+                </p>
+              )}
+              <p className="empty-text" style={{ fontSize: "0.75rem", marginTop: "0.5rem" }}>
+                API: {API_BASE_URL}
               </p>
             </div>
           )}

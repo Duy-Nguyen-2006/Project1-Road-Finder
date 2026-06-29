@@ -22,10 +22,29 @@ export const TourStopPropType = PropTypes.shape({
   node_id: PropTypes.string.isRequired,
 });
 
+export const LegPropType = PropTypes.shape({
+  kind: PropTypes.string.isRequired,
+  distance_meters: PropTypes.number,
+  route_points: PropTypes.arrayOf(CoordPropType),
+});
+
 export const TourPropType = PropTypes.shape({
   shipper_id: PropTypes.string.isRequired,
   ordered_stops: PropTypes.arrayOf(TourStopPropType).isRequired,
   total_distance_meters: PropTypes.number.isRequired,
+});
+
+export const TourResultPropType = PropTypes.shape({
+  shipper_id: PropTypes.string.isRequired,
+  ordered_stops: PropTypes.arrayOf(
+    PropTypes.shape({
+      order_id: PropTypes.string.isRequired,
+      kind: PropTypes.string.isRequired,
+    })
+  ).isRequired,
+  legs: PropTypes.arrayOf(LegPropType),
+  total_distance_meters: PropTypes.number.isRequired,
+  optimal: PropTypes.bool,
 });
 
 export const FleetResultPropType = PropTypes.shape({

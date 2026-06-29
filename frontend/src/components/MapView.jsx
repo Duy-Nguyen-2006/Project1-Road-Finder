@@ -13,14 +13,23 @@ import L from "leaflet";
 import PropTypes from "prop-types";
 import { bboxToLeaflet } from "../utils/geo";
 import {
+  getDropoffGlyph,
+  getOrderColor,
+  getOrderLabel,
+  getPickupGlyph,
+} from "../utils/orders";
+import {
+  getShipperGlyph,
+  getShipperLabel,
+} from "../utils/shippers";
+import {
   CoordPropType,
-  FleetResultPropType,
   OrderPropType,
   ShipperColorMapPropType,
   ShipperPropType,
+  TourResultPropType,
 } from "./proptypes";
 
-// Fix Leaflet default icon issue with Vite/Webpack
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
   iconRetinaUrl:
@@ -31,27 +40,25 @@ L.Icon.Default.mergeOptions({
     "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
 });
 
-// Custom marker icons
-function createIcon(color) {
+function pinIcon({ color, glyph, selected = false }) {
+  const ring = selected
+    ? `<circle cx="16" cy="15" r="13" fill="none" stroke="#000" stroke-width="2" opacity="0.35"/>`
+    : "";
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 42" width="32" height="42">
+    <path d="M16 1 C8 1 2 7 2 15 C2 25 16 41 16 41 C16 41 30 25 30 15 C30 7 24 1 16 1 Z"
+      fill="${color}" stroke="white" stroke-width="2.5"/>
+    <circle cx="16" cy="15" r="9" fill="white"/>
+    ${ring}
+    <text x="16" y="20" text-anchor="middle" font-size="${glyph.length > 2 ? 10 : 12}" font-weight="700" fill="${color}" font-family="Arial, sans-serif">${glyph}</text>
+  </svg>`;
   return L.divIcon({
-    className: "custom-marker",
-    html: `<div style="
-      width: 16px;
-      height: 16px;
-      background: ${color};
-      border: 2px solid white;
-      border-radius: 50%;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-    "></div>`,
-    iconSize: [16, 16],
-    iconAnchor: [8, 8],
+    className: "marker-pin",
+    html: svg,
+    iconSize: [32, 42],
+    iconAnchor: [16, 41],
+    popupAnchor: [0, -36],
   });
 }
-
-const PICKUP_ICON = createIcon("#16a34a");
-const DROPOFF_ICON = createIcon("#dc2626");
-const SHIPPER_ICON = createIcon("#2563eb");
-const PENDING_ICON = createIcon("#f59e0b");
 
 const DEFAULT_CENTER = [10.7769, 106.7009];
 const DEFAULT_ZOOM = 13;
@@ -71,7 +78,7 @@ MapClickHandler.propTypes = {
   onAddPoint: PropTypes.func.isRequired,
 };
 
-function MapBoundsFitter({ bounds, tourPolylines }) {
+function MapBoundsFitter({ bounds, allRoutePoints }) {
   const map = useMap();
   useEffect(() => {
     if (bounds) {
@@ -83,11 +90,10 @@ function MapBoundsFitter({ bounds, tourPolylines }) {
   }, [bounds, map]);
 
   useEffect(() => {
-    const allPoints = tourPolylines.flatMap((tour) => tour.points);
-    if (allPoints.length > 1) {
-      map.fitBounds(allPoints, { padding: [32, 32] });
+    if (allRoutePoints.length > 1) {
+      map.fitBounds(allRoutePoints, { padding: [32, 32] });
     }
-  }, [tourPolylines, map]);
+  }, [allRoutePoints, map]);
 
   return null;
 }
@@ -99,13 +105,8 @@ MapBoundsFitter.propTypes = {
     max_latitude: PropTypes.number,
     max_longitude: PropTypes.number,
   }),
-  tourPolylines: PropTypes.arrayOf(
-    PropTypes.shape({
-      shipperId: PropTypes.string,
-      points: PropTypes.arrayOf(PropTypes.arrayOf(PropTypes.number)),
-      color: PropTypes.string,
-    })
-  ).isRequired,
+  allRoutePoints: PropTypes.arrayOf(PropTypes.arrayOf(PropTypes.number))
+    .isRequired,
 };
 
 function MapInvalidator() {
@@ -117,36 +118,56 @@ function MapInvalidator() {
   return null;
 }
 
+function legToLatLngs(leg) {
+  return leg.route_points.map((p) => [p.latitude, p.longitude]);
+}
+
+function orderIdFromLegKind(kind) {
+  if (typeof kind !== "string") return null;
+  const idx = kind.lastIndexOf("_");
+  return idx > 0 ? kind.slice(0, idx) : null;
+}
+
 export default function MapView({
   bounds,
   orders,
   shippers,
   pendingPickup,
-  fleetResult,
+  tourResult,
+  selectedShipperId,
+  selectedOrderIds,
   shipperColorMap,
   selectionEnabled,
   onAddPoint,
-  placementMode,
 }) {
   const rectangleBounds = useMemo(() => bboxToLeaflet(bounds), [bounds]);
 
-  // Build polylines from fleet result
-  const tourPolylines = useMemo(() => {
-    if (!fleetResult?.tours) return [];
-    return fleetResult.tours.map((tour) => {
-      const points = [];
-      for (const leg of tour.legs) {
-        for (const p of leg.route_points) {
-          points.push([p.latitude, p.longitude]);
-        }
-      }
-      return {
-        shipperId: tour.shipper_id,
-        points,
-        color: shipperColorMap?.[tour.shipper_id] ?? "#666",
-      };
-    });
-  }, [fleetResult, shipperColorMap]);
+  const routeLegs = useMemo(() => {
+    if (!tourResult?.legs?.length) return [];
+    const shipperColor = shipperColorMap?.[tourResult.shipper_id] ?? "#2563eb";
+    return tourResult.legs
+      .filter((leg) => leg.route_points.length > 0)
+      .map((leg, index) => {
+        const orderId = orderIdFromLegKind(leg.kind);
+        const color = orderId
+          ? getOrderColor(orderId, orders)
+          : shipperColor;
+        const isDropoff = leg.kind?.endsWith("_dropoff");
+        return {
+          key: `${leg.kind}-${index}`,
+          points: legToLatLngs(leg),
+          color,
+          dashed: isDropoff,
+        };
+      });
+  }, [tourResult, orders, shipperColorMap]);
+
+  const allRoutePoints = useMemo(
+    () => routeLegs.flatMap((leg) => leg.points),
+    [routeLegs]
+  );
+
+  const pendingOrderNumber = orders.length + 1;
 
   return (
     <MapContainer
@@ -161,7 +182,7 @@ export default function MapView({
       />
       <MapInvalidator />
       <MapClickHandler enabled={selectionEnabled} onAddPoint={onAddPoint} />
-      <MapBoundsFitter bounds={bounds} tourPolylines={tourPolylines} />
+      <MapBoundsFitter bounds={bounds} allRoutePoints={allRoutePoints} />
 
       {rectangleBounds ? (
         <Rectangle
@@ -170,61 +191,93 @@ export default function MapView({
         />
       ) : null}
 
-      {/* Shipper markers */}
-      {shippers.map((s) => (
-        <Marker
-          key={`shipper-${s.id}`}
-          position={[s.location.latitude, s.location.longitude]}
-          icon={SHIPPER_ICON}
-        >
-          <Popup>
-            <strong>{s.id}</strong> (Shipper)
-          </Popup>
-        </Marker>
-      ))}
-
-      {/* Order markers */}
-      {orders.map((o) => (
-        <React.Fragment key={o.id}>
+      {shippers.map((s) => {
+        const color = shipperColorMap?.[s.id] ?? "#2563eb";
+        const selected = s.id === selectedShipperId;
+        const glyph = getShipperGlyph(s.id);
+        const label = getShipperLabel(s.id);
+        return (
           <Marker
-            position={[o.pickup.latitude, o.pickup.longitude]}
-            icon={PICKUP_ICON}
+            key={`shipper-${s.id}`}
+            position={[s.location.latitude, s.location.longitude]}
+            icon={pinIcon({
+              color,
+              glyph,
+              selected,
+            })}
+            zIndexOffset={selected ? 1000 : 0}
           >
             <Popup>
-              <strong>{o.id}</strong> - Lấy hàng
+              <strong>{label}</strong> ({glyph})
+              {selected ? " — đang chọn" : ""}
             </Popup>
           </Marker>
-          <Marker
-            position={[o.dropoff.latitude, o.dropoff.longitude]}
-            icon={DROPOFF_ICON}
-          >
-            <Popup>
-              <strong>{o.id}</strong> - Giao hàng
-            </Popup>
-          </Marker>
-        </React.Fragment>
-      ))}
+        );
+      })}
 
-      {/* Pending pickup marker */}
+      {orders.map((o) => {
+        const color = getOrderColor(o.id, orders);
+        const label = getOrderLabel(o.id);
+        const selected = selectedOrderIds.includes(o.id);
+        return (
+          <React.Fragment key={o.id}>
+            <Marker
+              position={[o.pickup.latitude, o.pickup.longitude]}
+              icon={pinIcon({
+                color,
+                glyph: getPickupGlyph(o.id),
+                selected,
+              })}
+              zIndexOffset={selected ? 900 : 0}
+            >
+              <Popup>
+                <strong>{label}</strong> — Lấy hàng ({getPickupGlyph(o.id)})
+              </Popup>
+            </Marker>
+            <Marker
+              position={[o.dropoff.latitude, o.dropoff.longitude]}
+              icon={pinIcon({
+                color,
+                glyph: getDropoffGlyph(o.id),
+                selected,
+              })}
+              zIndexOffset={selected ? 900 : 0}
+            >
+              <Popup>
+                <strong>{label}</strong> — Giao hàng ({getDropoffGlyph(o.id)})
+              </Popup>
+            </Marker>
+          </React.Fragment>
+        );
+      })}
+
       {pendingPickup && (
         <Marker
+          key="pending-pickup"
           position={[pendingPickup.latitude, pendingPickup.longitude]}
-          icon={PENDING_ICON}
+          icon={pinIcon({
+            color: "#f59e0b",
+            glyph: `P${pendingOrderNumber}`,
+          })}
         >
-          <Popup>Điểm lấy hàng (chờ chọn điểm giao)</Popup>
+          <Popup>
+            Đơn {pendingOrderNumber} — chờ chọn điểm giao (D{pendingOrderNumber})
+          </Popup>
         </Marker>
       )}
 
-      {/* Tour polylines */}
-      {tourPolylines.map((tp) =>
-        tp.points.length > 1 ? (
-          <Polyline
-            key={`tour-${tp.shipperId}`}
-            positions={tp.points}
-            pathOptions={{ color: tp.color, weight: 4, opacity: 0.8 }}
-          />
-        ) : null
-      )}
+      {routeLegs.map((leg) => (
+        <Polyline
+          key={leg.key}
+          positions={leg.points}
+          pathOptions={{
+            color: leg.color,
+            weight: 5,
+            opacity: 0.9,
+            dashArray: leg.dashed ? "8 6" : undefined,
+          }}
+        />
+      ))}
     </MapContainer>
   );
 }
@@ -239,9 +292,10 @@ MapView.propTypes = {
   orders: PropTypes.arrayOf(OrderPropType).isRequired,
   shippers: PropTypes.arrayOf(ShipperPropType).isRequired,
   pendingPickup: CoordPropType,
-  fleetResult: FleetResultPropType,
+  tourResult: TourResultPropType,
+  selectedShipperId: PropTypes.string,
+  selectedOrderIds: PropTypes.arrayOf(PropTypes.string).isRequired,
   shipperColorMap: ShipperColorMapPropType,
   selectionEnabled: PropTypes.bool.isRequired,
   onAddPoint: PropTypes.func.isRequired,
-  placementMode: PropTypes.string,
 };

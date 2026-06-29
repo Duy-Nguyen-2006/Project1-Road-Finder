@@ -1,5 +1,4 @@
 import json
-import math
 from pathlib import Path
 
 import pytest
@@ -71,9 +70,14 @@ def test_accepts_point_on_bbox_max_corners(tmp_path):
     assert result.node_id == "corner"
 
 
-def test_rejects_inside_bbox_beyond_max_snap_distance(runtime):
-    with pytest.raises(AcceptedAreaError):
-        snap_point(runtime, 10.85, 106.85)
+def test_accepts_point_far_inside_bbox(runtime):
+    """Any point inside the bbox is accepted; the 200m snap limit was
+    removed so the user can click anywhere in the supported area, even
+    if no node is within 200m. The nearest node is still returned and
+    the snap distance is reported on the leg."""
+    result = snap_point(runtime, 10.85, 106.85)
+    assert result.node_id  # some node was returned
+    assert result.distance_meters > 0.0
 
 
 def test_snaps_to_expected_node_at_clicked_coordinate(runtime):
@@ -97,49 +101,6 @@ def test_snapping_is_deterministic_across_repeated_calls(runtime):
         again = snap_point(runtime, lat, lon)
         assert again.node_id == first.node_id
         assert again.distance_meters == pytest.approx(first.distance_meters)
-
-
-def test_rejects_distance_just_over_max_snap_threshold(tmp_path):
-    anchor_lat, anchor_lon = 10.5, 106.5
-    path = _write_snap_test_graph(
-        tmp_path,
-        {"only": {"latitude": anchor_lat, "longitude": anchor_lon}},
-        max_snap=200.0,
-    )
-    rt = build_graph_runtime(path)
-    max_m = rt.metadata.max_snap_distance_meters
-    lat = anchor_lat + (max_m + 1.0) / 111_320.0
-    dist = haversine_meters(anchor_lat, anchor_lon, lat, anchor_lon)
-    assert dist > max_m
-    with pytest.raises(AcceptedAreaError):
-        snap_point(rt, lat, anchor_lon)
-
-
-def test_accepts_distance_exactly_at_max_snap_threshold(tmp_path):
-    anchor_lat, anchor_lon = 10.5, 106.5
-    path = _write_snap_test_graph(
-        tmp_path,
-        {"only": {"latitude": anchor_lat, "longitude": anchor_lon}},
-        max_snap=200.0,
-    )
-    rt = build_graph_runtime(path)
-    max_m = rt.metadata.max_snap_distance_meters
-    lo, hi = 0.0, max_m / 90_000.0
-    for _ in range(48):
-        mid = (lo + hi) / 2
-        lat = anchor_lat + mid
-        d = haversine_meters(anchor_lat, anchor_lon, lat, anchor_lon)
-        if d < max_m:
-            lo = mid
-        else:
-            hi = mid
-    lat = anchor_lat + lo
-    dist = haversine_meters(anchor_lat, anchor_lon, lat, anchor_lon)
-    assert dist <= max_m + 0.05
-    assert math.isclose(dist, max_m, rel_tol=0, abs_tol=0.05)
-    result = snap_point(rt, lat, anchor_lon)
-    assert result.node_id == "only"
-    assert result.distance_meters == pytest.approx(dist, rel=1e-6, abs=0.05)
 
 
 def test_accepted_area_error_detail_for_api_mapping():

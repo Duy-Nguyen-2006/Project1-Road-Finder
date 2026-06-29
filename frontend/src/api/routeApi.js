@@ -1,6 +1,14 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+export const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL ??
+  (import.meta.env.DEV ? "http://localhost:8000" : "");
 
 const ACCEPTED_AREA_DETAIL = "Error: Not in accepted area";
+
+// Network/CORS/backend-down errors surface as TypeError("Failed to fetch").
+// Wrap with a friendlier message that points the user to the backend URL.
+function networkErrorMessage(cause) {
+  return `Không kết nối được backend tại ${API_BASE_URL}. Hãy chắc chắn backend đang chạy (uvicorn app.main:app --port 8000) và CORS cho phép origin này. (${cause?.message ?? cause})`;
+}
 
 async function parseError(response) {
   const body = await parseJsonBody(response);
@@ -24,11 +32,29 @@ async function parseJsonBody(response) {
 }
 
 async function postJson(url, data) {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
-  });
+  let response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+  } catch (err) {
+    throw new Error(networkErrorMessage(err));
+  }
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return response.json();
+}
+
+async function getJson(url) {
+  let response;
+  try {
+    response = await fetch(url);
+  } catch (err) {
+    throw new Error(networkErrorMessage(err));
+  }
   if (!response.ok) {
     throw new Error(await parseError(response));
   }
@@ -36,13 +62,7 @@ async function postJson(url, data) {
 }
 
 export async function getGraphBounds() {
-  const response = await fetch(`${API_BASE_URL}/graph/bounds`);
-  if (!response.ok) {
-    throw new Error(
-      (await parseError(response)) || "Không tải được vùng hỗ trợ từ backend"
-    );
-  }
-  return response.json();
+  return getJson(`${API_BASE_URL}/graph/bounds`);
 }
 
 export async function postRoute({ start, end, options }) {
@@ -62,11 +82,7 @@ export async function postFleet({ shippers, orders, options }) {
 }
 
 export async function checkHealth() {
-  const response = await fetch(`${API_BASE_URL}/health`);
-  if (!response.ok) {
-    throw new Error("Backend health check failed");
-  }
-  return response.json();
+  return getJson(`${API_BASE_URL}/health`);
 }
 
 export const ERROR_MESSAGES = {

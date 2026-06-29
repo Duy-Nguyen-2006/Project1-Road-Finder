@@ -9,6 +9,7 @@
   --color-warm-gray: #615d59;
   --color-smoke: #c6c6c5;
   --color-faint-line: #dddddd;
+  --radius: 0;
 
   /* Typography */
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -83,7 +84,7 @@ button, input, textarea, select {
   width: 100%;
   height: 100%;
   min-height: 70vh;
-  border-radius: 12px;
+  border-radius: var(--radius);
   overflow: hidden;
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
 }
@@ -91,7 +92,7 @@ button, input, textarea, select {
 /* Cards */
 .panel-card {
   background: var(--color-pure-white);
-  border-radius: 12px;
+  border-radius: var(--radius);
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
   padding: 1rem;
   margin-bottom: 1rem;
@@ -123,7 +124,7 @@ button, input, textarea, select {
 .icon-button,
 .mode-button {
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius);
   padding: 0.625rem 1rem;
   cursor: pointer;
   transition: opacity 0.2s ease, transform 0.2s ease;
@@ -209,7 +210,7 @@ button, input, textarea, select {
   align-items: center;
   gap: 1rem;
   border: 1px solid var(--color-faint-line);
-  border-radius: 8px;
+  border-radius: var(--radius);
   padding: 0.75rem;
 }
 
@@ -244,7 +245,7 @@ button, input, textarea, select {
   flex: 1;
   padding: 0.5rem;
   border: 1px solid var(--color-faint-line);
-  border-radius: 8px;
+  border-radius: var(--radius);
   background: var(--color-pure-white);
   cursor: pointer;
   font-weight: 500;
@@ -288,8 +289,26 @@ button, input, textarea, select {
 
 .shipper-tour {
   border: 1px solid var(--color-faint-line);
-  border-radius: 8px;
+  border-radius: var(--radius);
   padding: 0.75rem;
+}
+
+.stop-order-id {
+  color: var(--color-warm-gray);
+  font-size: 0.75rem;
+}
+
+.idle-shippers-section {
+  border: 1px dashed var(--color-faint-line);
+  border-radius: var(--radius);
+  padding: 0.75rem;
+  background: #fafafa;
+}
+
+.idle-shippers-section h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.875rem;
+  color: var(--color-warm-gray);
 }
 
 .shipper-tour-header {
@@ -302,7 +321,7 @@ button, input, textarea, select {
 .shipper-color-dot {
   width: 12px;
   height: 12px;
-  border-radius: 50%;
+  border-radius: var(--radius);
   flex-shrink: 0;
 }
 
@@ -334,7 +353,7 @@ button, input, textarea, select {
 .stop-badge {
   display: inline-block;
   padding: 0.125rem 0.375rem;
-  border-radius: 9999px;
+  border-radius: var(--radius);
   font-size: 0.6875rem;
   font-weight: 500;
 }
@@ -349,10 +368,126 @@ button, input, textarea, select {
   color: #991b1b;
 }
 
+.stop-badge.order-stop {
+  border: 1px solid;
+  font-weight: 700;
+  min-width: 2rem;
+  text-align: center;
+}
+
+.stop-badge.shipper {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+/* Assignment panel */
+.assignment-panel h3 {
+  margin: 1rem 0 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--color-warm-gray);
+}
+
+.shipper-select-list,
+.order-select-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.select-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--color-faint-line);
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 0.875rem;
+}
+
+.select-row input {
+  flex-shrink: 0;
+}
+
+.select-row-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.order-select-row.selected {
+  background: #fafafa;
+}
+
+.order-color-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: var(--radius);
+  flex-shrink: 0;
+}
+
+.order-route-hint {
+  font-size: 0.75rem;
+  color: var(--color-warm-gray);
+}
+
+.order-point-section {
+  border-left: 4px solid transparent;
+  padding-left: 0.5rem;
+}
+
+.order-point-section.assigned {
+  background: #fafafa;
+}
+
+.order-flow-label {
+  font-size: 0.8125rem;
+  color: var(--color-warm-gray);
+  margin-bottom: 0.25rem;
+}
+
+/* Tour result */
+.tour-result {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.tour-result-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.tour-distance-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.875rem 1rem;
+  border-radius: var(--radius);
+  background: var(--color-midnight-ink);
+  color: var(--color-pure-white);
+}
+
+.tour-distance-label {
+  font-size: 0.75rem;
+  color: var(--color-sky-tint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tour-distance-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
 /* Unassigned */
 .unassigned-section {
   border: 1px dashed #fca5a5;
-  border-radius: 8px;
+  border-radius: var(--radius);
   padding: 0.75rem;
   background: #fef2f2;
 }

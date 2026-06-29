@@ -371,12 +371,18 @@ curl -X POST http://localhost:8000/route \
 
 ## Ghi chú
 
-- HCM graph mặc định (`backend/app/data/road_graph.json`) hiện là
-  `hcm-fixture-v2` (6 node / 5 cạnh, có `oneway` + `road_type`) cho
-  unit/integration test deterministic. Để smoke test trên TP.HCM thật,
-  chạy `scripts/generate_hcm_graph.py` (cần `osmnx` + `networkx` +
-  Geofabrik `vietnam-latest.osm.pbf`) rồi commit file mới với
-  `graph_version = hcm-v1`.
+- HCM graph mặc định (`backend/app/data/road_graph.hcm-v2-uw.json`) là `hcm-v2` (11056
+  node / 14526 cạnh đã được bỏ `oneway` để routing VRP không bị kẹt ở đường 1
+  chiều). Bbox thực: `10.731-10.823 lat × 106.654-106.749 lng` (~10×10 km quanh
+  trung tâm TP.HCM). Click trong bbox là snap được.
+  - `backend/app/data/road_graph.json` (`hcm-fixture-v2`, 6 node / 5 cạnh) vẫn
+    được dùng cho unit/integration test deterministic.
+  - `backend/app/data/road_graph.hcm-v2.json` là bản gốc còn `oneway` (chỉ dùng
+    để so sánh).
+  - Để tạo graph thực tế từ OSM, chạy `scripts/generate_hcm_graph.py` (cần
+    `osmnx` + `networkx` + Geofabrik `vietnam-latest.osm.pbf`) rồi commit file
+    mới với `graph_version = hcm-vN` và set làm `DEFAULT_GRAPH_PATH` trong
+    `backend/app/infrastructure/graph_loader.py`.
 - Cost model áp dụng multiplier theo `road_type` (`highway` ×0.8,
   `residential` ×1.2, `trunk` ×0.85, …). `avoid_road_types` set cost
   = inf cho mọi cạnh thuộc type đó.

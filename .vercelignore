@@ -1,0 +1,14 @@
+backend/.venv
+backend/app/data/road_graph.hcm-v1.json
+backend/app/data/road_graph.hcm-v2.json
+backend/tests
+.venv
+**/__pycache__
+**/.pytest_cache
+frontend/node_modules
+node_modules
+harness.db*
+scripts/bin/harness-cli
+droid-wiki
+.factory
+.agents

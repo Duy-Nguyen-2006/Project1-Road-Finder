@@ -8,14 +8,15 @@ const MODE_LABELS = {
 };
 
 const STEP_LABELS = {
-  [ORDER_STEP.PICKUP]: "Chọn điểm lấy hàng",
-  [ORDER_STEP.DROPOFF]: "Chọn điểm giao hàng",
+  [ORDER_STEP.SET_PICKUP]: "Click lên bản đồ để chọn điểm lấy hàng.",
+  [ORDER_STEP.SET_DROPOFF]: "Click lên bản đồ để chọn điểm giao hàng cho đơn vừa tạo.",
 };
 
 export default function ModeSwitcher({
   placementMode,
   onPlacementModeChange,
   orderStep,
+  onCancelPendingPickup,
 }) {
   return (
     <div className="panel-card">
@@ -32,15 +33,24 @@ export default function ModeSwitcher({
           </button>
         ))}
       </div>
+
       {placementMode === PLACEMENT_MODE.ORDER && (
-        <p className="helper-text">
-          {STEP_LABELS[orderStep]}
-        </p>
+        <>
+          <p className="helper-text">{STEP_LABELS[orderStep]}</p>
+          {orderStep === ORDER_STEP.SET_DROPOFF && (
+            <button
+              className="secondary-button"
+              onClick={onCancelPendingPickup}
+              type="button"
+            >
+              Hủy điểm lấy hàng vừa chọn
+            </button>
+          )}
+        </>
       )}
+
       {placementMode === PLACEMENT_MODE.SHIPPER && (
-        <p className="helper-text">
-          Click lên bản đồ để đặt vị trí shipper.
-        </p>
+        <p className="helper-text">Click lên bản đồ để đặt vị trí shipper.</p>
       )}
     </div>
   );
@@ -50,4 +60,5 @@ ModeSwitcher.propTypes = {
   placementMode: PropTypes.oneOf(Object.values(PLACEMENT_MODE)).isRequired,
   onPlacementModeChange: PropTypes.func.isRequired,
   orderStep: PropTypes.oneOf(Object.values(ORDER_STEP)).isRequired,
+  onCancelPendingPickup: PropTypes.func.isRequired,
 };

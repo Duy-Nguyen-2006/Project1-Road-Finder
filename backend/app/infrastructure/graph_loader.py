@@ -12,7 +12,7 @@ from app.domain.graph_types import (
     ValidatedGraph,
 )
 
-DEFAULT_GRAPH_PATH = Path(__file__).resolve().parents[1] / "data" / "road_graph.json"
+DEFAULT_GRAPH_PATH = Path(__file__).resolve().parents[1] / "data" / "road_graph.hcm-v2-uw.json"
 
 BBOX_FIELDS = (
     "min_latitude",
