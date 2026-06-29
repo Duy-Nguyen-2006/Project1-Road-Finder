@@ -95,6 +95,7 @@ def test_tour_optimal_for_two_orders(cost_matrix):
 
     tour = optimize_tour("node-start", stops, cost_matrix)
 
+    assert tour.feasible is True
     assert tour.total_distance_meters > 0
     assert len(tour.ordered_stops) == 4
 
@@ -125,6 +126,7 @@ def test_tour_single_order(cost_matrix):
 
     tour = optimize_tour("node-start", stops, cost_matrix)
 
+    assert tour.feasible is True
     assert tour.total_distance_meters > 0
     assert len(tour.ordered_stops) == 2
     assert tour.ordered_stops[0].kind == "pickup"

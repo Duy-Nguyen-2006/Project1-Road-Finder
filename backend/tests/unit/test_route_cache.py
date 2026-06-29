@@ -8,7 +8,6 @@ from app.domain.dijkstra import bidirectional_dijkstra
 from app.infrastructure.route_cache import (
     CachedGraphPath,
     RouteCache,
-    cache_lookup_key,
     make_cache_key,
 )
 from app.services.shortest_path_service import find_cached_or_compute_graph_path
@@ -139,10 +138,6 @@ def test_oneway_reverse_is_not_served_from_forward_cache(tmp_path):
         "b",
         "a",
     ) is None
-
-
-def test_cache_lookup_key_matches_storage_key():
-    assert cache_lookup_key("v", "o", "a", "b") == make_cache_key("v", "o", "a", "b")
 
 
 def _write_versioned_graph(

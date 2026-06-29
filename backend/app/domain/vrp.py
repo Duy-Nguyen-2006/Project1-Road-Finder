@@ -3,9 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from itertools import permutations, product
 
-from app.domain.cost_model import RoutingOptions
+from app.domain.cost_model import (
+    DEFAULT_VRP_BRUTE_FORCE_MAX_ORDERS,
+    DEFAULT_VRP_BRUTE_FORCE_MAX_SHIPPERS,
+    RoutingOptions,
+)
 from app.domain.protocols import DistanceProvider
 from app.domain.tsp import Stop, Tour, _check_precedence, optimize_tour
+from app.domain.two_opt import two_opt_improve
 
 
 @dataclass(frozen=True)
@@ -162,41 +167,12 @@ def _intra_route_2opt(
     shipper_node: str,
 ) -> list[Stop]:
     """2-opt improvement within a single route."""
-    if len(stops) < 4:
-        return stops
-
-    current = list(stops)
-    current_dist = _compute_tour_distance(shipper_node, current, cost_matrix)
-
-    while True:
-        improved = _try_2opt_improvement(current, current_dist, cost_matrix, shipper_node)
-        if improved is None:
-            return current
-        current, current_dist = improved
-
-
-def _try_2opt_improvement(
-    current: list[Stop],
-    current_dist: float,
-    cost_matrix: DistanceProvider,
-    shipper_node: str,
-) -> tuple[list[Stop], float] | None:
-    """Try a single 2-opt move; return improved (stops, dist) or None."""
-    for i in range(len(current) - 1):
-        for j in range(i + 2, len(current)):
-            candidate = _reverse_segment(current, i, j)
-            if not _check_precedence(candidate):
-                continue
-
-            new_dist = _compute_tour_distance(shipper_node, candidate, cost_matrix)
-            if new_dist < current_dist:
-                return candidate, new_dist
-    return None
-
-
-def _reverse_segment(stops: list[Stop], i: int, j: int) -> list[Stop]:
-    """Reverse the segment from index i+1 to j inclusive."""
-    return stops[:i + 1] + stops[i + 1:j + 1][::-1] + stops[j + 1:]
+    return two_opt_improve(
+        stops,
+        lambda candidate: _compute_tour_distance(shipper_node, candidate, cost_matrix),
+        _check_precedence,
+        max_iterations=None,
+    )
 
 
 def _try_relocate_order(
@@ -384,13 +360,11 @@ def _resolve_thresholds(
         return options.resolved_vrp_order_threshold(), options.resolved_vrp_shipper_threshold()
 
     if brute_force_threshold is None:
-        from app.domain.cost_model import DEFAULT_VRP_BRUTE_FORCE_MAX_ORDERS
         order_threshold = DEFAULT_VRP_BRUTE_FORCE_MAX_ORDERS
     else:
         order_threshold = brute_force_threshold
 
     if max_brute_force_shippers is None:
-        from app.domain.cost_model import DEFAULT_VRP_BRUTE_FORCE_MAX_SHIPPERS
         shipper_threshold = DEFAULT_VRP_BRUTE_FORCE_MAX_SHIPPERS
     else:
         shipper_threshold = max_brute_force_shippers
@@ -428,6 +402,7 @@ def _build_heuristic_fleet(
                 ordered_stops=[],
                 total_distance_meters=0.0,
                 optimal=False,
+                feasible=False,
             )))
             continue
         fleet_tours.append((sid, Tour(
@@ -587,6 +562,8 @@ def _evaluate_single_shipper(
         return Tour(ordered_stops=[], total_distance_meters=0.0, optimal=True), True
 
     tour = optimize_tour(shipper_node, stops, cost_matrix, options=options)
+    if not tour.feasible:
+        return None
     return tour, tour.optimal
 
 

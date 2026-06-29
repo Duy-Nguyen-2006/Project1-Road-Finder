@@ -3,7 +3,7 @@ from fastapi import APIRouter, Request
 from app.application.cost_matrix import CostMatrix
 from app.application.graph_bounds import build_graph_bounds_payload
 from app.application.health import build_health_payload
-from app.domain.assignment import rank_shippers_for_order
+from app.domain.assignment import AssignmentSnapContext, rank_shippers_for_order
 from app.domain.cost_model import RoutingOptions
 from app.domain.errors import AcceptedAreaError, NoRouteError
 from app.application.node_lookup import GraphNodeLookup
@@ -17,7 +17,6 @@ from app.models.route_models import (
     AssignmentResponse,
     FleetRequest,
     FleetResponse,
-    FleetTourResponse,
     GraphBoundsResponse,
     RouteRequest,
     RouteResponse,
@@ -100,13 +99,21 @@ def assignments(request: Request, body: AssignmentRequest) -> AssignmentResponse
         all_nodes = list(shipper_nodes.values()) + [pickup_snap.node_id, dropoff_snap.node_id]
         cost_matrix.compute_for_nodes(all_nodes)
 
-        # Rank shippers
+        snap_context = AssignmentSnapContext(
+            shipper_snap_distances={
+                sid: shipper_snaps[sid][0].distance_meters for sid in shipper_nodes
+            },
+            pickup_snap_distance=pickup_snap.distance_meters,
+            dropoff_snap_distance=dropoff_snap.distance_meters,
+        )
+
         result = rank_shippers_for_order(
             shipper_ids=[s.id for s in body.shippers],
             shipper_nodes=shipper_nodes,
             pickup_node=pickup_snap.node_id,
             dropoff_node=dropoff_snap.node_id,
             cost_matrix=cost_matrix,
+            snap_context=snap_context,
         )
 
         # Build response
@@ -141,15 +148,10 @@ def assignments(request: Request, body: AssignmentRequest) -> AssignmentResponse
                         kind="to_dropoff",
                     )
                 )
-            total_m = (
-                sum(leg.distance_meters for leg in legs)
-                if legs
-                else sr.total_distance_meters
-            )
             ranking.append(ShipperRouteResponse(
                 shipper_id=sr.shipper_id,
                 feasible=sr.feasible,
-                total_distance_meters=total_m,
+                total_distance_meters=sr.total_distance_meters,
                 legs=legs,
             ))
 
@@ -221,6 +223,7 @@ def tours(request: Request, body: TourRequest) -> TourResponse:
             legs=legs,
             total_distance_meters=tour.total_distance_meters,
             optimal=tour.optimal,
+            feasible=tour.feasible,
         )
     except AcceptedAreaError as exc:
         raise http_exception_for_domain_error(exc) from exc
@@ -292,12 +295,13 @@ def fleet(request: Request, body: FleetRequest) -> FleetResponse:
                 cost_matrix=cost_matrix,
             )
 
-            tours.append(FleetTourResponse(
+            tours.append(TourResponse(
                 shipper_id=sid,
                 ordered_stops=ordered_stops,
                 legs=legs,
                 total_distance_meters=tour.total_distance_meters,
                 optimal=tour.optimal,
+                feasible=tour.feasible,
             ))
 
         return FleetResponse(

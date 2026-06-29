@@ -3,8 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from itertools import permutations
 
-from app.domain.cost_model import RoutingOptions
+from app.domain.cost_model import DEFAULT_TSP_BRUTE_FORCE_MAX_STOPS, RoutingOptions
 from app.domain.protocols import DistanceProvider
+from app.domain.two_opt import two_opt_improve
 
 
 @dataclass(frozen=True)
@@ -19,6 +20,7 @@ class Tour:
     ordered_stops: list[Stop]
     total_distance_meters: float
     optimal: bool
+    feasible: bool = True
 
 
 def _check_precedence(stops: list[Stop]) -> bool:
@@ -46,29 +48,31 @@ def _tour_distance(stops: list[Stop], cost_matrix: DistanceProvider) -> float:
     return total
 
 
-def _brute_force_optimal(
+def _tour_distance_from_shipper(
+    shipper_node: str,
     stops: list[Stop],
     cost_matrix: DistanceProvider,
-) -> tuple[list[Stop], float] | None:
-    """Find optimal tour by trying all valid permutations.
+) -> float:
+    if not stops:
+        return 0.0
+    total = 0.0
+    current = shipper_node
+    for stop in stops:
+        dist = cost_matrix.get_distance(current, stop.node_id)
+        if dist is None or dist == float("inf"):
+            return float("inf")
+        total += dist
+        current = stop.node_id
+    return total
 
-    Only feasible for small n (≤ 10 stops).
-    Returns (best_stops, best_distance) or None if no valid tour.
-    """
-    best_stops = None
-    best_dist = float("inf")
 
-    for perm in permutations(stops):
-        if not _check_precedence(list(perm)):
-            continue
-        dist = _tour_distance(list(perm), cost_matrix)
-        if dist < best_dist:
-            best_dist = dist
-            best_stops = list(perm)
-
-    if best_stops is None:
-        return None
-    return best_stops, best_dist
+def _infeasible_tour() -> Tour:
+    return Tour(
+        ordered_stops=[],
+        total_distance_meters=0.0,
+        optimal=False,
+        feasible=False,
+    )
 
 
 def _is_dropoff_eligible(
@@ -114,11 +118,7 @@ def _nearest_neighbor_heuristic(
     cost_matrix: DistanceProvider,
     start_node: str | None = None,
 ) -> list[Stop] | None:
-    """Nearest-neighbor heuristic respecting precedence constraints.
-
-    Starts from start_node (or first stop's node if not given).
-    At each step, pick the nearest unvisited stop that doesn't violate precedence.
-    """
+    """Nearest-neighbor heuristic respecting precedence constraints."""
     if not stops:
         return []
 
@@ -160,88 +160,33 @@ def _initialize_start(
     return first.node_id
 
 
-def _two_opt_improve(
-    stops: list[Stop],
-    cost_matrix: DistanceProvider,
-    max_iterations: int = 100,
-) -> list[Stop]:
-    """2-opt local search improvement respecting precedence."""
-    if len(stops) < 4:
-        return stops
-
-    current = list(stops)
-    current_dist = _tour_distance(current, cost_matrix)
-
-    for _ in range(max_iterations):
-        result = _find_2opt_move(current, current_dist, cost_matrix)
-        if result is None:
-            break
-        current, current_dist = result
-
-    return current
-
-
-def _find_2opt_move(
-    current: list[Stop],
-    current_dist: float,
-    cost_matrix: DistanceProvider,
-) -> tuple[list[Stop], float] | None:
-    """Find a single improving 2-opt move; return (new_stops, new_dist) or None."""
-    for i in range(len(current) - 1):
-        for j in range(i + 2, len(current)):
-            candidate = current[:i + 1] + current[i + 1:j + 1][::-1] + current[j + 1:]
-            if not _check_precedence(candidate):
-                continue
-            candidate_dist = _tour_distance(candidate, cost_matrix)
-            if candidate_dist < current_dist:
-                return candidate, candidate_dist
-    return None
-
-
 def optimize_tour(
     shipper_node: str,
     stops: list[Stop],
     cost_matrix: DistanceProvider,
     *,
-    n_small_threshold: int | None = None,
     options: RoutingOptions | None = None,
 ) -> Tour:
     """Optimize a tour for a single shipper visiting multiple stops.
 
-    Constraints:
-    - Pickup of each order must come before its dropoff
-    - Start from shipper_node
-
     For n ≤ threshold: brute-force optimal.
     For n > threshold: nearest-neighbor + 2-opt heuristic.
 
-    Threshold resolution order:
-    1. `options.tsp_brute_force_max_stops` (if `options` given)
-    2. `n_small_threshold` (explicit override)
-    3. `RoutingOptions.DEFAULT_TSP_BRUTE_FORCE_MAX_STOPS` (8)
-
+    Threshold comes from `options.tsp_brute_force_max_stops` or the module default.
     A threshold of 0 disables the brute-force path entirely.
     """
     if not stops:
         return Tour(ordered_stops=[], total_distance_meters=0.0, optimal=True)
 
-    # Resolve threshold: options > explicit kwarg > default
-    if options is not None:
-        threshold = options.resolved_tsp_threshold()
-    elif n_small_threshold is not None:
-        threshold = n_small_threshold
-    else:
-        from app.domain.cost_model import DEFAULT_TSP_BRUTE_FORCE_MAX_STOPS
-        threshold = DEFAULT_TSP_BRUTE_FORCE_MAX_STOPS
-
-    # Add shipper start as first stop conceptually
-    # For brute-force, we need to consider all permutations of stops
-    # starting from shipper_node
+    threshold = (
+        options.resolved_tsp_threshold()
+        if options is not None
+        else DEFAULT_TSP_BRUTE_FORCE_MAX_STOPS
+    )
 
     n = len(stops)
 
     if threshold > 0 and n <= threshold:
-        # Try brute-force with shipper_node as fixed start
         result = _brute_force_with_start(stops, shipper_node, cost_matrix)
         if result:
             best_stops, best_dist = result
@@ -251,27 +196,19 @@ def optimize_tour(
                 optimal=True,
             )
 
-    # Heuristic: nearest-neighbor + 2-opt
     nn_result = _nearest_neighbor_heuristic(stops, cost_matrix, shipper_node)
     if nn_result is None:
-        # No valid tour found
-        return Tour(
-            ordered_stops=[],
-            total_distance_meters=float("inf"),
-            optimal=False,
-        )
+        return _infeasible_tour()
 
-    improved = _two_opt_improve(nn_result, cost_matrix)
+    improved = two_opt_improve(
+        nn_result,
+        lambda candidate: _tour_distance(candidate, cost_matrix),
+        _check_precedence,
+    )
 
-    # Compute total distance including start
-    total = 0.0
-    current = shipper_node
-    for stop in improved:
-        dist = cost_matrix.get_distance(current, stop.node_id)
-        if dist is None:
-            dist = float("inf")
-        total += dist
-        current = stop.node_id
+    total = _tour_distance_from_shipper(shipper_node, improved, cost_matrix)
+    if total == float("inf"):
+        return _infeasible_tour()
 
     return Tour(
         ordered_stops=improved,
@@ -293,7 +230,6 @@ def _brute_force_with_start(
         if not _check_precedence(list(perm)):
             continue
 
-        # Compute distance: start -> perm[0] -> perm[1] -> ...
         total = 0.0
         current = start_node
         valid = True

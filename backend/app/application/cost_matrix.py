@@ -13,13 +13,14 @@ from app.infrastructure.route_cache import CachedGraphPath
 @dataclass(frozen=True)
 class CostMatrixEntry:
     distance_meters: float
-    path_node_ids: list[str]
+    path_node_ids: tuple[str, ...]
 
 
 class CostMatrix:
     """Many-to-many distance matrix using Dijkstra from each source.
 
     Caches results by (graph_version, options_hash, src_node, dst_node).
+    Pair lookups compute on demand when not yet precomputed.
     """
 
     def __init__(self, runtime: GraphRuntime, options: RoutingOptions | None = None):
@@ -32,62 +33,54 @@ class CostMatrix:
 
     def get_distance(self, src_node: str, dst_node: str) -> float | None:
         entry = self._get_entry(src_node, dst_node)
-        return entry.distance_meters if entry else None
+        return entry.distance_meters
 
     def get_path(self, src_node: str, dst_node: str) -> list[str] | None:
         entry = self._get_entry(src_node, dst_node)
-        return entry.path_node_ids if entry else None
+        return list(entry.path_node_ids)
 
-    def _get_entry(self, src_node: str, dst_node: str) -> CostMatrixEntry | None:
+    def _get_entry(self, src_node: str, dst_node: str) -> CostMatrixEntry:
         key = (src_node, dst_node)
-        if key in self._entries:
-            return self._entries[key]
+        if key not in self._entries:
+            self._entries[key] = self._compute_pair(src_node, dst_node)
+        return self._entries[key]
 
-        return None
+    def _compute_pair(self, src_node: str, dst_node: str) -> CostMatrixEntry:
+        if src_node == dst_node:
+            return CostMatrixEntry(distance_meters=0.0, path_node_ids=(src_node,))
+
+        version = self._runtime.metadata.graph_version
+        cache = self._runtime.route_cache
+        cached = cache.get(version, self._opts_hash, src_node, dst_node)
+        if cached is not None:
+            return CostMatrixEntry(
+                distance_meters=cached.graph_distance_meters,
+                path_node_ids=tuple(cached.node_ids),
+            )
+
+        adjacency = self._runtime.adjacency_for(self._options)
+        reverse_adjacency = self._runtime.reverse_adjacency_for(self._options)
+        try:
+            result = bidirectional_dijkstra(
+                adjacency, src_node, dst_node, reverse_adjacency=reverse_adjacency
+            )
+            path = CachedGraphPath(
+                node_ids=list(result.node_ids),
+                graph_distance_meters=result.graph_distance_meters,
+            )
+            cache.put(version, self._opts_hash, src_node, dst_node, path)
+            return CostMatrixEntry(
+                distance_meters=result.graph_distance_meters,
+                path_node_ids=tuple(result.node_ids),
+            )
+        except NoRouteError:
+            return CostMatrixEntry(distance_meters=float("inf"), path_node_ids=())
 
     def compute_for_nodes(self, node_ids: list[str]) -> None:
         """Pre-compute distances between all pairs of given nodes."""
-        adjacency = self._runtime.adjacency_for(self._options)
-        reverse_adjacency = self._runtime.reverse_adjacency_for(self._options)
-        version = self._runtime.metadata.graph_version
-        cache = self._runtime.route_cache
-
         for src in node_ids:
             for dst in node_ids:
-                if src == dst:
-                    self._entries[(src, dst)] = CostMatrixEntry(
-                        distance_meters=0.0, path_node_ids=[src]
-                    )
-                    continue
-
-                # Check route cache first
-                cached = cache.get(version, self._opts_hash, src, dst)
-                if cached is not None:
-                    self._entries[(src, dst)] = CostMatrixEntry(
-                        distance_meters=cached.graph_distance_meters,
-                        path_node_ids=list(cached.node_ids),
-                    )
-                    continue
-
-                try:
-                    result = bidirectional_dijkstra(
-                        adjacency, src, dst, reverse_adjacency=reverse_adjacency
-                    )
-                    path = CachedGraphPath(
-                        node_ids=list(result.node_ids),
-                        graph_distance_meters=result.graph_distance_meters,
-                    )
-                    cache.put(version, self._opts_hash, src, dst, path)
-                    entry = CostMatrixEntry(
-                        distance_meters=result.graph_distance_meters,
-                        path_node_ids=list(result.node_ids),
-                    )
-                    self._entries[(src, dst)] = entry
-                except NoRouteError:
-                    self._entries[(src, dst)] = CostMatrixEntry(
-                        distance_meters=float("inf"),
-                        path_node_ids=[],
-                    )
+                self._get_entry(src, dst)
 
     def snap_points(
         self, coordinates: list[tuple[float, float]]

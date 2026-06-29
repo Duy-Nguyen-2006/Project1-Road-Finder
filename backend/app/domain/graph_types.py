@@ -15,6 +15,7 @@ class GraphBBox:
 class GraphMetadata:
     graph_version: str
     bbox: GraphBBox
+    # Informational; snap_service no longer rejects clicks beyond this distance.
     max_snap_distance_meters: float
 
 

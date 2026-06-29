@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -25,27 +26,36 @@ class GraphRuntime:
     route_cache: RouteCache
     _adjacency_cache: dict[str, Adjacency] = field(default_factory=dict)
     _reverse_adjacency_cache: dict[str, Adjacency] = field(default_factory=dict)
+    _adjacency_lock: threading.Lock = field(
+        default_factory=threading.Lock, compare=False, repr=False
+    )
 
-    def adjacency_for(self, options: RoutingOptions | None = None) -> Adjacency:
-        if options is None:
-            options = RoutingOptions()
+    def _ensure_adjacency(self, options: RoutingOptions) -> None:
         key = _options_hash(options)
-        if key not in self._adjacency_cache:
+        if key in self._adjacency_cache and key in self._reverse_adjacency_cache:
+            return
+
+        with self._adjacency_lock:
+            if key in self._adjacency_cache and key in self._reverse_adjacency_cache:
+                return
             validated = ValidatedGraph(
                 metadata=self.metadata, nodes=self.nodes, edges=self.edges
             )
             forward = build_directed_adjacency(validated, options)
             self._adjacency_cache[key] = forward
             self._reverse_adjacency_cache[key] = build_reverse_adjacency(forward)
-        return self._adjacency_cache[key]
+
+    def adjacency_for(self, options: RoutingOptions | None = None) -> Adjacency:
+        if options is None:
+            options = RoutingOptions()
+        self._ensure_adjacency(options)
+        return self._adjacency_cache[_options_hash(options)]
 
     def reverse_adjacency_for(self, options: RoutingOptions | None = None) -> Adjacency:
         if options is None:
             options = RoutingOptions()
-        key = _options_hash(options)
-        if key not in self._adjacency_cache:
-            self.adjacency_for(options)
-        return self._reverse_adjacency_cache[key]
+        self._ensure_adjacency(options)
+        return self._reverse_adjacency_cache[_options_hash(options)]
 
     @property
     def adjacency(self) -> Adjacency:

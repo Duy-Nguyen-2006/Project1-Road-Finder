@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import threading
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 DEFAULT_ROUTE_CACHE_LIMIT = 1000
 
@@ -21,18 +22,10 @@ def make_cache_key(
     return f"{graph_version}|{options_hash}|{start_node_id}|{end_node_id}"
 
 
-def cache_lookup_key(
-    graph_version: str,
-    options_hash: str,
-    start_node_id: str,
-    end_node_id: str,
-) -> str:
-    return make_cache_key(graph_version, options_hash, start_node_id, end_node_id)
-
-
 @dataclass
 class RouteCache:
     limit: int = DEFAULT_ROUTE_CACHE_LIMIT
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def __post_init__(self) -> None:
         self._entries: OrderedDict[str, CachedGraphPath] = OrderedDict()
@@ -51,10 +44,10 @@ class RouteCache:
         direct_key = make_cache_key(
             graph_version, options_hash, start_node_id, end_node_id
         )
-        if direct_key in self._entries:
-            self._entries.move_to_end(direct_key)
-            return self._entries[direct_key]
-
+        with self._lock:
+            if direct_key in self._entries:
+                self._entries.move_to_end(direct_key)
+                return self._entries[direct_key]
         return None
 
     def put(
@@ -68,8 +61,9 @@ class RouteCache:
         key = make_cache_key(
             graph_version, options_hash, start_node_id, end_node_id
         )
-        if key in self._entries:
-            self._entries.move_to_end(key)
-        self._entries[key] = path
-        while len(self._entries) > self.limit:
-            self._entries.popitem(last=False)
+        with self._lock:
+            if key in self._entries:
+                self._entries.move_to_end(key)
+            self._entries[key] = path
+            while len(self._entries) > self.limit:
+                self._entries.popitem(last=False)

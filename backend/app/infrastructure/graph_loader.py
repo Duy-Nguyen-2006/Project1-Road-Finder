@@ -60,6 +60,7 @@ def _validate_metadata(metadata: Any) -> GraphMetadata:
     bbox_values = _validate_bbox(metadata.get("bbox"))
     _validate_bbox_ranges(bbox_values)
 
+    # Required graph metadata for /health and /graph/bounds; not enforced at snap time.
     max_snap_distance = metadata.get("max_snap_distance_meters")
     if not isinstance(max_snap_distance, (int, float)) or float(max_snap_distance) <= 0:
         raise GraphValidationError("metadata.max_snap_distance_meters must be > 0")

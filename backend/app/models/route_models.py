@@ -15,6 +15,7 @@ class RoutingOptionsRequest(BaseModel):
 
 class GraphBoundsResponse(BaseModel):
     bbox: dict[str, float]
+    # Informational metadata from the graph file; snap_service does not enforce this.
     max_snap_distance_meters: float
     graph_version: str
 
@@ -88,6 +89,7 @@ class TourResponse(BaseModel):
     legs: list[LegResponse]
     total_distance_meters: float
     optimal: bool
+    feasible: bool = True
 
 
 # --- Phase 3: VRP Fleet DTOs ---
@@ -99,16 +101,8 @@ class FleetRequest(BaseModel):
     options: RoutingOptionsRequest = Field(default_factory=RoutingOptionsRequest)
 
 
-class FleetTourResponse(BaseModel):
-    shipper_id: str
-    ordered_stops: list[StopResponse]
-    legs: list[LegResponse]
-    total_distance_meters: float
-    optimal: bool
-
-
 class FleetResponse(BaseModel):
-    tours: list[FleetTourResponse]
+    tours: list[TourResponse]
     unassigned_order_ids: list[str]
     total_distance_meters: float
     optimal: bool
