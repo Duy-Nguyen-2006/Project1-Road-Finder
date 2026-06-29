@@ -28,8 +28,6 @@ export const SHIPPER_COLORS = [
   "#e11d48",
 ];
 
-export const UNASSIGNED_ORDER_COLOR = "#9ca3af";
-
 export function getShipperColor(index) {
   return SHIPPER_COLORS[index % SHIPPER_COLORS.length];
 }

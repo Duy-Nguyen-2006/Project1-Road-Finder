@@ -126,6 +126,7 @@ frontend/
       FleetResultPanel.jsx
       MapView.jsx
       ModeSwitcher.jsx
+      MultiShipperResultPanel.jsx
       OptionsPanel.jsx
       PointList.jsx
       proptypes.js
@@ -145,6 +146,7 @@ frontend/
       geo.js
       orders.js
       shippers.js
+      tourDisplay.js
     App.css
     App.jsx
     main.jsx
@@ -157,76 +159,6 @@ vercel.json
 
 <files>
 This section contains the contents of the repository's files.
-
-<file path="backend/tests/unit/test_supabase_jwt.py">
-import time
-
-import jwt
-import pytest
-
-from app.auth.supabase_jwt import verify_access_token
-from app.domain.errors import AuthError
-
-
-SUPABASE_URL = "https://example.supabase.co"
-JWT_SECRET = "test-jwt-secret-for-hs256"
-
-
-def _hs256_token(
-    *,
-    secret: str = JWT_SECRET,
-    sub: str = "user-123",
-    expired: bool = False,
-) -> str:
-    now = int(time.time())
-    payload = {
-        "sub": sub,
-        "aud": "authenticated",
-        "iss": f"{SUPABASE_URL}/auth/v1",
-        "exp": now - 10 if expired else now + 3600,
-        "iat": now,
-    }
-    return jwt.encode(payload, secret, algorithm="HS256")
-
-
-@pytest.fixture(autouse=True)
-def supabase_env(monkeypatch):
-    monkeypatch.setenv("SUPABASE_URL", SUPABASE_URL)
-    monkeypatch.setenv("SUPABASE_JWT_SECRET", JWT_SECRET)
-
-
-def test_verify_hs256_token_success():
-    token = _hs256_token()
-    claims = verify_access_token(token)
-    assert claims["sub"] == "user-123"
-    assert claims["aud"] == "authenticated"
-
-
-def test_verify_hs256_expired_token():
-    token = _hs256_token(expired=True)
-    with pytest.raises(AuthError, match="Token đã hết hạn"):
-        verify_access_token(token)
-
-
-def test_verify_hs256_invalid_signature():
-    token = _hs256_token(secret="wrong-secret")
-    with pytest.raises(AuthError, match="Token không hợp lệ"):
-        verify_access_token(token)
-
-
-def test_verify_hs256_missing_secret(monkeypatch):
-    monkeypatch.delenv("SUPABASE_JWT_SECRET", raising=False)
-    token = _hs256_token()
-    with pytest.raises(AuthError, match="SUPABASE_JWT_SECRET is not configured"):
-        verify_access_token(token)
-
-
-def test_verify_missing_supabase_url(monkeypatch):
-    monkeypatch.delenv("SUPABASE_URL", raising=False)
-    token = _hs256_token()
-    with pytest.raises(AuthError, match="SUPABASE_URL is not configured"):
-        verify_access_token(token)
-</file>
 
 <file path="backend/app/application/graph_bounds.py">
 from __future__ import annotations
@@ -337,71 +269,6 @@ def require_current_user(
         return verify_access_token(token)
     except AuthError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
-</file>
-
-<file path="backend/app/auth/supabase_jwt.py">
-from __future__ import annotations
-
-import os
-from functools import lru_cache
-
-import jwt
-from jwt import PyJWKClient, PyJWKClientError
-
-from app.domain.errors import AuthError
-
-
-def _supabase_url() -> str:
-    url = os.environ.get("SUPABASE_URL", "").rstrip("/")
-    if not url:
-        raise AuthError("SUPABASE_URL is not configured")
-    return url
-
-
-@lru_cache(maxsize=1)
-def _jwks_client() -> PyJWKClient:
-    return PyJWKClient(f"{_supabase_url()}/auth/v1/.well-known/jwks.json")
-
-
-def _decode_hs256(token: str) -> dict:
-    secret = os.environ.get("SUPABASE_JWT_SECRET", "").strip()
-    if not secret:
-        raise AuthError("SUPABASE_JWT_SECRET is not configured for HS256 tokens")
-    return jwt.decode(
-        token,
-        secret,
-        algorithms=["HS256"],
-        audience="authenticated",
-        issuer=f"{_supabase_url()}/auth/v1",
-    )
-
-
-def _decode_asymmetric(token: str) -> dict:
-    signing_key = _jwks_client().get_signing_key_from_jwt(token)
-    return jwt.decode(
-        token,
-        signing_key.key,
-        algorithms=["ES256", "RS256"],
-        audience="authenticated",
-        issuer=f"{_supabase_url()}/auth/v1",
-    )
-
-
-def verify_access_token(token: str) -> dict:
-    """Verify a Supabase-issued JWT and return its claims."""
-    try:
-        header = jwt.get_unverified_header(token)
-        if header.get("alg") == "HS256":
-            return _decode_hs256(token)
-        return _decode_asymmetric(token)
-    except jwt.ExpiredSignatureError as exc:
-        raise AuthError("Token đã hết hạn") from exc
-    except AuthError:
-        raise
-    except (jwt.InvalidTokenError, PyJWKClientError) as exc:
-        raise AuthError("Token không hợp lệ") from exc
-    except Exception as exc:
-        raise AuthError("Không xác thực được token") from exc
 </file>
 
 <file path="backend/app/domain/protocols.py">
@@ -922,6 +789,76 @@ def test_pydantic_model_accepts_zero_threshold():
     assert req.tsp_brute_force_max_stops == 0
 </file>
 
+<file path="backend/tests/unit/test_supabase_jwt.py">
+import time
+
+import jwt
+import pytest
+
+from app.auth.supabase_jwt import verify_access_token
+from app.domain.errors import AuthError
+
+
+SUPABASE_URL = "https://example.supabase.co"
+JWT_SECRET = "test-jwt-secret-for-hs256"
+
+
+def _hs256_token(
+    *,
+    secret: str = JWT_SECRET,
+    sub: str = "user-123",
+    expired: bool = False,
+) -> str:
+    now = int(time.time())
+    payload = {
+        "sub": sub,
+        "aud": "authenticated",
+        "iss": f"{SUPABASE_URL}/auth/v1",
+        "exp": now - 10 if expired else now + 3600,
+        "iat": now,
+    }
+    return jwt.encode(payload, secret, algorithm="HS256")
+
+
+@pytest.fixture(autouse=True)
+def supabase_env(monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", SUPABASE_URL)
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", JWT_SECRET)
+
+
+def test_verify_hs256_token_success():
+    token = _hs256_token()
+    claims = verify_access_token(token)
+    assert claims["sub"] == "user-123"
+    assert claims["aud"] == "authenticated"
+
+
+def test_verify_hs256_expired_token():
+    token = _hs256_token(expired=True)
+    with pytest.raises(AuthError, match="Token đã hết hạn"):
+        verify_access_token(token)
+
+
+def test_verify_hs256_invalid_signature():
+    token = _hs256_token(secret="wrong-secret")
+    with pytest.raises(AuthError, match="Token không hợp lệ"):
+        verify_access_token(token)
+
+
+def test_verify_hs256_missing_secret(monkeypatch):
+    monkeypatch.delenv("SUPABASE_JWT_SECRET", raising=False)
+    token = _hs256_token()
+    with pytest.raises(AuthError, match="SUPABASE_JWT_SECRET is not configured"):
+        verify_access_token(token)
+
+
+def test_verify_missing_supabase_url(monkeypatch):
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    token = _hs256_token()
+    with pytest.raises(AuthError, match="SUPABASE_URL is not configured"):
+        verify_access_token(token)
+</file>
+
 <file path="frontend/src/api/authHeaders.js">
 import { isSupabaseConfigured, supabase } from "../lib/supabase";
 
@@ -996,6 +933,123 @@ export default function AuthPanel() {
     </div>
   );
 }
+</file>
+
+<file path="frontend/src/components/MultiShipperResultPanel.jsx">
+import React, { useMemo } from "react";
+import PropTypes from "prop-types";
+import { formatDistance } from "../utils/format";
+import {
+  getDropoffGlyph,
+  getOrderLabel,
+  getPickupGlyph,
+} from "../utils/orders";
+import { getShipperGlyph, getShipperLabel } from "../utils/shippers";
+import { buildTourDisplayData } from "../utils/tourDisplay";
+import {
+  OrderPropType,
+  ShipperColorMapPropType,
+  TourResultsPropType,
+} from "./proptypes";
+
+export default function MultiShipperResultPanel({
+  tourResults,
+  orders,
+  shipperColorMap,
+}) {
+  const { shipperTours, totalDistanceMeters } = useMemo(
+    () => buildTourDisplayData(tourResults),
+    [tourResults]
+  );
+
+  if (!tourResults?.length) return null;
+
+  return (
+    <div className="panel-card">
+      <h2>Kết quả tuyến</h2>
+      <div className="multi-tour-result">
+        <div className="fleet-total">
+          Tổng quãng đường đội: {formatDistance(totalDistanceMeters)}
+        </div>
+
+        {shipperTours.map((tour) => {
+          const shipperColor =
+            shipperColorMap?.[tour.shipper_id] ?? "#2563eb";
+          return (
+            <div key={tour.shipper_id} className="shipper-tour">
+              <div className="shipper-tour-header">
+                <span
+                  className="shipper-color-dot"
+                  style={{ background: shipperColor }}
+                />
+                <span className="shipper-name">
+                  {getShipperLabel(tour.shipper_id)} (
+                  {getShipperGlyph(tour.shipper_id)})
+                </span>
+                <span className="shipper-distance">
+                  {formatDistance(tour.total_distance_meters)}
+                </span>
+              </div>
+
+              <ul className="stop-list">
+                <li className="stop-item">
+                  <span
+                    className="stop-badge shipper"
+                    style={{
+                      background: `${shipperColor}22`,
+                      color: shipperColor,
+                      borderColor: shipperColor,
+                    }}
+                  >
+                    ▶
+                  </span>
+                  <span>
+                    Xuất phát — {getShipperLabel(tour.shipper_id)} (
+                    {getShipperGlyph(tour.shipper_id)})
+                  </span>
+                </li>
+                {tour.stops.map((stop) => {
+                  const label = getOrderLabel(stop.order_id);
+                  const glyph =
+                    stop.kind === "pickup"
+                      ? getPickupGlyph(stop.order_id)
+                      : getDropoffGlyph(stop.order_id);
+                  return (
+                    <li
+                      key={`${stop.order_id}-${stop.kind}`}
+                      className="stop-item"
+                    >
+                      <span
+                        className="stop-badge order-stop"
+                        style={{
+                          background: `${shipperColor}22`,
+                          color: shipperColor,
+                          borderColor: shipperColor,
+                        }}
+                      >
+                        {stop.sequence}
+                      </span>
+                      <span>
+                        {label} — {glyph}{" "}
+                        {stop.kind === "pickup" ? "lấy hàng" : "giao hàng"}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+MultiShipperResultPanel.propTypes = {
+  tourResults: TourResultsPropType,
+  orders: PropTypes.arrayOf(OrderPropType).isRequired,
+  shipperColorMap: ShipperColorMapPropType,
+};
 </file>
 
 <file path="frontend/src/components/ScenarioPanel.jsx">
@@ -1210,132 +1264,6 @@ ScenarioPanel.propTypes = {
   scenarioSnapshot: PropTypes.func.isRequired,
   onLoadScenario: PropTypes.func.isRequired,
   onAddPresetShipper: PropTypes.func.isRequired,
-};
-</file>
-
-<file path="frontend/src/components/ShipperAssignmentPanel.jsx">
-import React from "react";
-import PropTypes from "prop-types";
-import { VRP_STATUS } from "../hooks/useVrpState";
-import {
-  getOrderColor,
-  getOrderLabel,
-  getOrderNumber,
-} from "../utils/orders";
-import { getShipperGlyph, getShipperLabel } from "../utils/shippers";
-import {
-  OrderPropType,
-  ShipperColorMapPropType,
-  ShipperPropType,
-} from "./proptypes";
-
-export default function ShipperAssignmentPanel({
-  shippers,
-  orders,
-  selectedShipperId,
-  selectedOrderIds,
-  shipperColorMap,
-  status,
-  canOptimize,
-  onSelectShipper,
-  onToggleOrder,
-  onOptimize,
-}) {
-  if (shippers.length === 0) {
-    return (
-      <div className="panel-card">
-        <h2>Phân công & tối ưu</h2>
-        <p className="helper-text">Thêm ít nhất một shipper trên bản đồ trước.</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="panel-card assignment-panel">
-      <h2>Phân công & tối ưu</h2>
-      <p className="helper-text">
-        Chọn shipper, tick các đơn shipper đó nhận, rồi bấm tối ưu quãng đường.
-      </p>
-
-      <h3>1. Chọn shipper</h3>
-      <div className="shipper-select-list">
-        {shippers.map((shipper) => (
-          <label key={shipper.id} className="select-row">
-            <input
-              type="radio"
-              name="selected-shipper"
-              checked={selectedShipperId === shipper.id}
-              onChange={() => onSelectShipper(shipper.id)}
-            />
-            <span
-              className="shipper-color-dot"
-              style={{ background: shipperColorMap?.[shipper.id] ?? "#666" }}
-            />
-            <span className="select-row-label">
-              <strong>{getShipperLabel(shipper.id)}</strong>
-              <span className="order-route-hint">{getShipperGlyph(shipper.id)}</span>
-            </span>
-          </label>
-        ))}
-      </div>
-
-      <h3>2. Chọn đơn shipper nhận</h3>
-      {orders.length === 0 ? (
-        <p className="helper-text">Chưa có đơn hàng. Thêm đơn trên bản đồ.</p>
-      ) : (
-        <div className="order-select-list">
-          {orders.map((order) => {
-            const color = getOrderColor(order.id, orders);
-            const label = getOrderLabel(order.id);
-            const n = getOrderNumber(order.id);
-            const checked = selectedOrderIds.includes(order.id);
-            return (
-              <label
-                key={order.id}
-                className={`select-row order-select-row${checked ? " selected" : ""}`}
-                style={{ borderColor: checked ? color : undefined }}
-              >
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  onChange={() => onToggleOrder(order.id)}
-                />
-                <span className="order-color-dot" style={{ background: color }} />
-                <span className="select-row-label">
-                  <strong>{label}</strong>
-                  <span className="order-route-hint">
-                    P{n} (lấy) → D{n} (giao)
-                  </span>
-                </span>
-              </label>
-            );
-          })}
-        </div>
-      )}
-
-      <button
-        className="primary-button"
-        onClick={onOptimize}
-        disabled={!canOptimize}
-        type="button"
-      >
-        {status === VRP_STATUS.LOADING ? "Đang tối ưu..." : "Tối ưu quãng đường"}
-      </button>
-    </div>
-  );
-}
-
-ShipperAssignmentPanel.propTypes = {
-  shippers: PropTypes.arrayOf(ShipperPropType).isRequired,
-  orders: PropTypes.arrayOf(OrderPropType).isRequired,
-  selectedShipperId: PropTypes.string,
-  selectedOrderIds: PropTypes.arrayOf(PropTypes.string).isRequired,
-  shipperColorMap: ShipperColorMapPropType,
-  status: PropTypes.string.isRequired,
-  canOptimize: PropTypes.bool.isRequired,
-  onSelectShipper: PropTypes.func.isRequired,
-  onToggleOrder: PropTypes.func.isRequired,
-  onOptimize: PropTypes.func.isRequired,
 };
 </file>
 
@@ -1637,25 +1565,6 @@ export function useUserData(user) {
 }
 </file>
 
-<file path="frontend/src/lib/supabase.js">
-import { createClient } from "@supabase/supabase-js";
-
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL ?? "";
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY ?? "";
-
-export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
-
-export const supabase = isSupabaseConfigured
-  ? createClient(supabaseUrl, supabaseAnonKey, {
-      auth: {
-        persistSession: true,
-        autoRefreshToken: true,
-        detectSessionInUrl: false,
-      },
-    })
-  : null;
-</file>
-
 <file path="frontend/src/utils/format.js">
 export function formatDistance(meters) {
   if (typeof meters !== "number" || !Number.isFinite(meters) || meters < 0) {
@@ -1732,6 +1641,35 @@ export function getShipperLabel(shipperId) {
 
 export function getShipperShortLabel(shipperId) {
   return getShipperGlyph(shipperId);
+}
+</file>
+
+<file path="frontend/src/utils/tourDisplay.js">
+/**
+ * Build per-shipper stop sequences (1, 2, 3…) from tour results.
+ * Returns lookup keys `${orderId}:${kind}` scoped per shipper via nested map.
+ */
+export function buildTourDisplayData(tourResults = []) {
+  const stopLookup = {};
+  const shipperTours = [];
+
+  for (const tour of tourResults) {
+    let sequence = 1;
+    const stops = tour.ordered_stops.map((stop) => {
+      const entry = { ...stop, sequence };
+      stopLookup[`${tour.shipper_id}:${stop.order_id}:${stop.kind}`] = sequence;
+      sequence += 1;
+      return entry;
+    });
+    shipperTours.push({ ...tour, stops });
+  }
+
+  const totalDistanceMeters = tourResults.reduce(
+    (sum, tour) => sum + (tour.total_distance_meters ?? 0),
+    0
+  );
+
+  return { stopLookup, shipperTours, totalDistanceMeters };
 }
 </file>
 
@@ -1860,6 +1798,71 @@ def snap_point(
     )
 
     return SnapResult(node_id=node_id, distance_meters=distance_meters)
+</file>
+
+<file path="backend/app/auth/supabase_jwt.py">
+from __future__ import annotations
+
+import os
+from functools import lru_cache
+
+import jwt
+from jwt import PyJWKClient, PyJWKClientError
+
+from app.domain.errors import AuthError
+
+
+def _supabase_url() -> str:
+    url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    if not url:
+        raise AuthError("SUPABASE_URL is not configured")
+    return url
+
+
+@lru_cache(maxsize=1)
+def _jwks_client() -> PyJWKClient:
+    return PyJWKClient(f"{_supabase_url()}/auth/v1/.well-known/jwks.json")
+
+
+def _decode_hs256(token: str) -> dict:
+    secret = os.environ.get("SUPABASE_JWT_SECRET", "").strip()
+    if not secret:
+        raise AuthError("SUPABASE_JWT_SECRET is not configured for HS256 tokens")
+    return jwt.decode(
+        token,
+        secret,
+        algorithms=["HS256"],
+        audience="authenticated",
+        issuer=f"{_supabase_url()}/auth/v1",
+    )
+
+
+def _decode_asymmetric(token: str) -> dict:
+    signing_key = _jwks_client().get_signing_key_from_jwt(token)
+    return jwt.decode(
+        token,
+        signing_key.key,
+        algorithms=["ES256", "RS256"],
+        audience="authenticated",
+        issuer=f"{_supabase_url()}/auth/v1",
+    )
+
+
+def verify_access_token(token: str) -> dict:
+    """Verify a Supabase-issued JWT and return its claims."""
+    try:
+        header = jwt.get_unverified_header(token)
+        if header.get("alg") == "HS256":
+            return _decode_hs256(token)
+        return _decode_asymmetric(token)
+    except jwt.ExpiredSignatureError as exc:
+        raise AuthError("Token đã hết hạn") from exc
+    except AuthError:
+        raise
+    except (jwt.InvalidTokenError, PyJWKClientError) as exc:
+        raise AuthError("Token không hợp lệ") from exc
+    except Exception as exc:
+        raise AuthError("Không xác thực được token") from exc
 </file>
 
 <file path="backend/app/domain/cost_model.py">
@@ -3029,63 +3032,187 @@ OptionsPanel.propTypes = {
 };
 </file>
 
-<file path="frontend/src/components/proptypes.js">
+<file path="frontend/src/components/ShipperAssignmentPanel.jsx">
+import React from "react";
 import PropTypes from "prop-types";
+import { VRP_STATUS } from "../hooks/useVrpState";
+import {
+  getOrderLabel,
+  getPickupGlyph,
+  getDropoffGlyph,
+} from "../utils/orders";
+import { getShipperGlyph, getShipperLabel } from "../utils/shippers";
+import {
+  OrderAssignmentsPropType,
+  OrderPropType,
+  ShipperColorMapPropType,
+  ShipperPropType,
+} from "./proptypes";
 
-export const CoordPropType = PropTypes.shape({
-  latitude: PropTypes.number.isRequired,
-  longitude: PropTypes.number.isRequired,
-});
+export default function ShipperAssignmentPanel({
+  shippers,
+  orders,
+  selectedShipperId,
+  selectedOrderIds,
+  orderAssignments,
+  shipperColorMap,
+  status,
+  canOptimize,
+  onSelectShipper,
+  onToggleOrder,
+  onOptimize,
+}) {
+  if (shippers.length === 0) {
+    return (
+      <div className="panel-card">
+        <h2>Phân công & tối ưu</h2>
+        <p className="helper-text">Thêm ít nhất một shipper trên bản đồ trước.</p>
+      </div>
+    );
+  }
 
-export const OrderPropType = PropTypes.shape({
-  id: PropTypes.string.isRequired,
-  pickup: CoordPropType.isRequired,
-  dropoff: CoordPropType.isRequired,
-});
+  return (
+    <div className="panel-card assignment-panel">
+      <h2>Phân công & tối ưu</h2>
+      <p className="helper-text">
+        Chọn shipper, tick các đơn shipper đó nhận. Đơn đã gán cho shipper khác
+        sẽ bị khóa.
+      </p>
 
-export const ShipperPropType = PropTypes.shape({
-  id: PropTypes.string.isRequired,
-  location: CoordPropType.isRequired,
-});
+      <h3>1. Chọn shipper</h3>
+      <div className="shipper-select-list">
+        {shippers.map((shipper) => (
+          <label key={shipper.id} className="select-row">
+            <input
+              type="radio"
+              name="selected-shipper"
+              checked={selectedShipperId === shipper.id}
+              onChange={() => onSelectShipper(shipper.id)}
+            />
+            <span
+              className="shipper-color-dot"
+              style={{ background: shipperColorMap?.[shipper.id] ?? "#666" }}
+            />
+            <span className="select-row-label">
+              <strong>{getShipperLabel(shipper.id)}</strong>
+              <span className="order-route-hint">{getShipperGlyph(shipper.id)}</span>
+            </span>
+          </label>
+        ))}
+      </div>
 
-export const TourStopPropType = PropTypes.shape({
-  order_id: PropTypes.string.isRequired,
-  kind: PropTypes.string.isRequired,
-  node_id: PropTypes.string.isRequired,
-});
+      <h3>2. Chọn đơn shipper nhận</h3>
+      {!selectedShipperId ? (
+        <p className="helper-text">Chọn shipper trước khi tick đơn.</p>
+      ) : orders.length === 0 ? (
+        <p className="helper-text">Chưa có đơn hàng. Thêm đơn trên bản đồ.</p>
+      ) : (
+        <div className="order-select-list">
+          {orders.map((order) => {
+            const label = getOrderLabel(order.id);
+            const owner = orderAssignments[order.id];
+            const checked = owner === selectedShipperId;
+            const lockedByOther = Boolean(owner && owner !== selectedShipperId);
+            const ownerColor = lockedByOther
+              ? shipperColorMap?.[owner] ?? "#666"
+              : undefined;
 
-export const LegPropType = PropTypes.shape({
-  kind: PropTypes.string.isRequired,
-  distance_meters: PropTypes.number,
-  route_points: PropTypes.arrayOf(CoordPropType),
-});
+            return (
+              <label
+                key={order.id}
+                className={`select-row order-select-row${checked ? " selected" : ""}${lockedByOther ? " locked" : ""}`}
+                style={{
+                  borderColor: checked
+                    ? shipperColorMap?.[selectedShipperId]
+                    : lockedByOther
+                      ? ownerColor
+                      : undefined,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  disabled={lockedByOther}
+                  onChange={() => onToggleOrder(order.id)}
+                />
+                <span
+                  className="order-color-dot"
+                  style={{
+                    background: owner
+                      ? shipperColorMap?.[owner] ?? "#9ca3af"
+                      : "#d1d5db",
+                  }}
+                />
+                <span className="select-row-label">
+                  <strong>{label}</strong>
+                  <span className="order-route-hint">
+                    {getPickupGlyph(order.id)} (lấy) → {getDropoffGlyph(order.id)} (giao)
+                  </span>
+                  {lockedByOther ? (
+                    <span
+                      className="owner-badge"
+                      style={{
+                        color: ownerColor,
+                        borderColor: ownerColor,
+                        background: `${ownerColor}18`,
+                      }}
+                    >
+                      Đã gán {getShipperGlyph(owner)}
+                    </span>
+                  ) : null}
+                </span>
+              </label>
+            );
+          })}
+        </div>
+      )}
 
-export const TourPropType = PropTypes.shape({
-  shipper_id: PropTypes.string.isRequired,
-  ordered_stops: PropTypes.arrayOf(TourStopPropType).isRequired,
-  total_distance_meters: PropTypes.number.isRequired,
-});
+      <button
+        className="primary-button"
+        onClick={onOptimize}
+        disabled={!canOptimize}
+        type="button"
+      >
+        {status === VRP_STATUS.LOADING
+          ? "Đang tối ưu..."
+          : "Tối ưu tất cả shipper"}
+      </button>
+    </div>
+  );
+}
 
-export const TourResultPropType = PropTypes.shape({
-  shipper_id: PropTypes.string.isRequired,
-  ordered_stops: PropTypes.arrayOf(
-    PropTypes.shape({
-      order_id: PropTypes.string.isRequired,
-      kind: PropTypes.string.isRequired,
+ShipperAssignmentPanel.propTypes = {
+  shippers: PropTypes.arrayOf(ShipperPropType).isRequired,
+  orders: PropTypes.arrayOf(OrderPropType).isRequired,
+  selectedShipperId: PropTypes.string,
+  selectedOrderIds: PropTypes.arrayOf(PropTypes.string).isRequired,
+  orderAssignments: OrderAssignmentsPropType.isRequired,
+  shipperColorMap: ShipperColorMapPropType,
+  status: PropTypes.string.isRequired,
+  canOptimize: PropTypes.bool.isRequired,
+  onSelectShipper: PropTypes.func.isRequired,
+  onToggleOrder: PropTypes.func.isRequired,
+  onOptimize: PropTypes.func.isRequired,
+};
+</file>
+
+<file path="frontend/src/lib/supabase.js">
+import { createClient } from "@supabase/supabase-js";
+
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL ?? "";
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY ?? "";
+
+export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
+
+export const supabase = isSupabaseConfigured
+  ? createClient(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: false,
+      },
     })
-  ).isRequired,
-  legs: PropTypes.arrayOf(LegPropType),
-  total_distance_meters: PropTypes.number.isRequired,
-  optimal: PropTypes.bool,
-});
-
-export const FleetResultPropType = PropTypes.shape({
-  total_distance_meters: PropTypes.number.isRequired,
-  tours: PropTypes.arrayOf(TourPropType),
-  unassigned_order_ids: PropTypes.arrayOf(PropTypes.string),
-});
-
-export const ShipperColorMapPropType = PropTypes.objectOf(PropTypes.string);
+  : null;
 </file>
 
 <file path="frontend/src/pages/AuthCallback.jsx">
@@ -4677,240 +4804,67 @@ ModeSwitcher.propTypes = {
 };
 </file>
 
-<file path="frontend/src/hooks/useVrpState.js">
-import { useCallback, useState } from "react";
+<file path="frontend/src/components/proptypes.js">
+import PropTypes from "prop-types";
 
-export const PLACEMENT_MODE = {
-  ORDER: "order",
-  SHIPPER: "shipper",
-};
+export const CoordPropType = PropTypes.shape({
+  latitude: PropTypes.number.isRequired,
+  longitude: PropTypes.number.isRequired,
+});
 
-export const ORDER_STEP = {
-  SET_PICKUP: "set_pickup",
-  SET_DROPOFF: "set_dropoff",
-};
+export const OrderPropType = PropTypes.shape({
+  id: PropTypes.string.isRequired,
+  pickup: CoordPropType.isRequired,
+  dropoff: CoordPropType.isRequired,
+});
 
-export const VRP_STATUS = {
-  IDLE: "idle",
-  LOADING: "loading",
-  SUCCESS: "success",
-  ERROR: "error",
-};
+export const ShipperPropType = PropTypes.shape({
+  id: PropTypes.string.isRequired,
+  location: CoordPropType.isRequired,
+});
 
-export const SHIPPER_COLORS = [
-  "#2563eb",
-  "#dc2626",
-  "#16a34a",
-  "#9333ea",
-  "#ea580c",
-  "#0891b2",
-  "#ca8a04",
-  "#e11d48",
-];
+export const TourStopPropType = PropTypes.shape({
+  order_id: PropTypes.string.isRequired,
+  kind: PropTypes.string.isRequired,
+  node_id: PropTypes.string.isRequired,
+});
 
-export function getShipperColor(index) {
-  return SHIPPER_COLORS[index % SHIPPER_COLORS.length];
-}
+export const LegPropType = PropTypes.shape({
+  kind: PropTypes.string.isRequired,
+  distance_meters: PropTypes.number,
+  route_points: PropTypes.arrayOf(CoordPropType),
+});
 
-let _nextShipperId = 1;
-let _nextOrderId = 1;
+export const TourPropType = PropTypes.shape({
+  shipper_id: PropTypes.string.isRequired,
+  ordered_stops: PropTypes.arrayOf(TourStopPropType).isRequired,
+  total_distance_meters: PropTypes.number.isRequired,
+});
 
-function _maxIdNumber(items, prefix) {
-  let max = 0;
-  for (const item of items) {
-    const match = item.id?.match(new RegExp(String.raw`^${prefix}(\d+)$`));
-    if (match) {
-      max = Math.max(max, Number.parseInt(match[1], 10));
-    }
-  }
-  return max;
-}
+export const TourResultPropType = PropTypes.shape({
+  shipper_id: PropTypes.string.isRequired,
+  ordered_stops: PropTypes.arrayOf(
+    PropTypes.shape({
+      order_id: PropTypes.string.isRequired,
+      kind: PropTypes.string.isRequired,
+    })
+  ).isRequired,
+  legs: PropTypes.arrayOf(LegPropType),
+  total_distance_meters: PropTypes.number.isRequired,
+  optimal: PropTypes.bool,
+});
 
-function syncIdCounters(orders, shippers) {
-  _nextOrderId = _maxIdNumber(orders, "o") + 1;
-  _nextShipperId = _maxIdNumber(shippers, "s") + 1;
-}
+export const FleetResultPropType = PropTypes.shape({
+  total_distance_meters: PropTypes.number.isRequired,
+  tours: PropTypes.arrayOf(TourPropType),
+  unassigned_order_ids: PropTypes.arrayOf(PropTypes.string),
+});
 
-function clearTourOnEdit(setTourResult, setStatus, setErrorMessage) {
-  setTourResult(null);
-  setStatus(VRP_STATUS.IDLE);
-  setErrorMessage("");
-}
+export const ShipperColorMapPropType = PropTypes.objectOf(PropTypes.string);
 
-export function useVrpState() {
-  const [placementMode, setPlacementMode] = useState(PLACEMENT_MODE.ORDER);
-  const [pendingPickup, setPendingPickup] = useState(null);
-  const [orders, setOrders] = useState([]);
-  const [shippers, setShippers] = useState([]);
-  const [selectedShipperId, setSelectedShipperId] = useState(null);
-  const [selectedOrderIds, setSelectedOrderIds] = useState([]);
-  const [tourResult, setTourResult] = useState(null);
-  const [status, setStatus] = useState(VRP_STATUS.IDLE);
-  const [errorMessage, setErrorMessage] = useState("");
-  const [avoidRoadTypes, setAvoidRoadTypes] = useState([]);
+export const OrderAssignmentsPropType = PropTypes.objectOf(PropTypes.string);
 
-  const resetTour = useCallback(() => {
-    clearTourOnEdit(setTourResult, setStatus, setErrorMessage);
-  }, []);
-
-  const setPickupForNewOrder = useCallback((point) => {
-    setPendingPickup(point);
-    setErrorMessage("");
-  }, []);
-
-  const setDropoffForPendingOrder = useCallback((point) => {
-    if (!pendingPickup) return;
-    const orderId = `o${_nextOrderId++}`;
-    setOrders((prev) => [
-      ...prev,
-      { id: orderId, pickup: pendingPickup, dropoff: point },
-    ]);
-    setPendingPickup(null);
-    resetTour();
-  }, [pendingPickup, resetTour]);
-
-  const cancelPendingPickup = useCallback(() => {
-    setPendingPickup(null);
-    setErrorMessage("");
-  }, []);
-
-  const addShipper = useCallback((point) => {
-    const newShipper = {
-      id: `s${_nextShipperId++}`,
-      location: point,
-    };
-    setShippers((prev) => [...prev, newShipper]);
-    setSelectedShipperId((current) => current ?? newShipper.id);
-    resetTour();
-  }, [resetTour]);
-
-  const removeOrder = useCallback((orderId) => {
-    setOrders((prev) => prev.filter((o) => o.id !== orderId));
-    setSelectedOrderIds((prev) => prev.filter((id) => id !== orderId));
-    resetTour();
-  }, [resetTour]);
-
-  const removeShipper = useCallback((shipperId) => {
-    setShippers((prev) => {
-      const next = prev.filter((s) => s.id !== shipperId);
-      setSelectedShipperId((current) => {
-        if (current !== shipperId) return current;
-        return next[0]?.id ?? null;
-      });
-      return next;
-    });
-    resetTour();
-  }, [resetTour]);
-
-  const clearAll = useCallback(() => {
-    setOrders([]);
-    setShippers([]);
-    setPendingPickup(null);
-    setSelectedShipperId(null);
-    setSelectedOrderIds([]);
-    setTourResult(null);
-    setStatus(VRP_STATUS.IDLE);
-    setErrorMessage("");
-  }, []);
-
-  const selectShipper = useCallback((shipperId) => {
-    setSelectedShipperId(shipperId);
-    resetTour();
-  }, [resetTour]);
-
-  const toggleOrderSelection = useCallback((orderId) => {
-    setSelectedOrderIds((prev) =>
-      prev.includes(orderId)
-        ? prev.filter((id) => id !== orderId)
-        : [...prev, orderId]
-    );
-    resetTour();
-  }, [resetTour]);
-
-  const beginRequest = useCallback(() => {
-    setStatus(VRP_STATUS.LOADING);
-    setErrorMessage("");
-  }, []);
-
-  const completeRequest = useCallback((data) => {
-    setTourResult(data);
-    setStatus(VRP_STATUS.SUCCESS);
-    setErrorMessage("");
-  }, []);
-
-  const failRequest = useCallback((message) => {
-    setStatus(VRP_STATUS.ERROR);
-    setErrorMessage(message || "Có lỗi xảy ra.");
-  }, []);
-
-  const getScenarioSnapshot = useCallback(
-    () => ({
-      orders,
-      shippers,
-      selectedShipperId,
-      selectedOrderIds,
-      avoidRoadTypes,
-    }),
-    [orders, shippers, selectedShipperId, selectedOrderIds, avoidRoadTypes]
-  );
-
-  const loadScenario = useCallback((payload) => {
-    const nextOrders = payload?.orders ?? [];
-    const nextShippers = payload?.shippers ?? [];
-    syncIdCounters(nextOrders, nextShippers);
-    setOrders(nextOrders);
-    setShippers(nextShippers);
-    setSelectedShipperId(
-      payload?.selectedShipperId ?? nextShippers[0]?.id ?? null
-    );
-    setSelectedOrderIds(payload?.selectedOrderIds ?? []);
-    setAvoidRoadTypes(payload?.avoidRoadTypes ?? []);
-    setPendingPickup(null);
-    setTourResult(null);
-    setStatus(VRP_STATUS.IDLE);
-    setErrorMessage("");
-  }, []);
-
-  const canOptimize =
-    Boolean(selectedShipperId) &&
-    selectedOrderIds.length > 0 &&
-    status !== VRP_STATUS.LOADING;
-
-  const orderStep = pendingPickup
-    ? ORDER_STEP.SET_DROPOFF
-    : ORDER_STEP.SET_PICKUP;
-
-  return {
-    placementMode,
-    setPlacementMode,
-    orderStep,
-    pendingPickup,
-    orders,
-    shippers,
-    selectedShipperId,
-    selectedOrderIds,
-    tourResult,
-    status,
-    errorMessage,
-    avoidRoadTypes,
-    setAvoidRoadTypes,
-    canOptimize,
-    setPickupForNewOrder,
-    setDropoffForPendingOrder,
-    cancelPendingPickup,
-    addShipper,
-    removeOrder,
-    removeShipper,
-    clearAll,
-    selectShipper,
-    toggleOrderSelection,
-    beginRequest,
-    completeRequest,
-    failRequest,
-    getScenarioSnapshot,
-    loadScenario,
-  };
-}
+export const TourResultsPropType = PropTypes.arrayOf(TourResultPropType);
 </file>
 
 <file path="vercel.json">
@@ -5472,6 +5426,290 @@ uvicorn[standard]
 pydantic
 PyJWT[crypto]>=2.8
 requests  # test-only: used by tests/integration/test_no_external_runtime.py to monkey-patch external HTTP
+</file>
+
+<file path="frontend/src/hooks/useVrpState.js">
+import { useCallback, useMemo, useState } from "react";
+
+export const PLACEMENT_MODE = {
+  ORDER: "order",
+  SHIPPER: "shipper",
+};
+
+export const ORDER_STEP = {
+  SET_PICKUP: "set_pickup",
+  SET_DROPOFF: "set_dropoff",
+};
+
+export const VRP_STATUS = {
+  IDLE: "idle",
+  LOADING: "loading",
+  SUCCESS: "success",
+  ERROR: "error",
+};
+
+export const SHIPPER_COLORS = [
+  "#2563eb",
+  "#dc2626",
+  "#16a34a",
+  "#9333ea",
+  "#ea580c",
+  "#0891b2",
+  "#ca8a04",
+  "#e11d48",
+];
+
+export const UNASSIGNED_ORDER_COLOR = "#9ca3af";
+
+export function getShipperColor(index) {
+  return SHIPPER_COLORS[index % SHIPPER_COLORS.length];
+}
+
+let _nextShipperId = 1;
+let _nextOrderId = 1;
+
+function _maxIdNumber(items, prefix) {
+  let max = 0;
+  for (const item of items) {
+    const match = item.id?.match(new RegExp(String.raw`^${prefix}(\d+)$`));
+    if (match) {
+      max = Math.max(max, Number.parseInt(match[1], 10));
+    }
+  }
+  return max;
+}
+
+function syncIdCounters(orders, shippers) {
+  _nextOrderId = _maxIdNumber(orders, "o") + 1;
+  _nextShipperId = _maxIdNumber(shippers, "s") + 1;
+}
+
+function clearTourOnEdit(setTourResults, setStatus, setErrorMessage) {
+  setTourResults([]);
+  setStatus(VRP_STATUS.IDLE);
+  setErrorMessage("");
+}
+
+function migrateOrderAssignments(payload) {
+  if (payload?.orderAssignments) {
+    return payload.orderAssignments;
+  }
+  if (payload?.selectedShipperId && payload?.selectedOrderIds?.length) {
+    const map = {};
+    for (const orderId of payload.selectedOrderIds) {
+      map[orderId] = payload.selectedShipperId;
+    }
+    return map;
+  }
+  return {};
+}
+
+export function useVrpState() {
+  const [placementMode, setPlacementMode] = useState(PLACEMENT_MODE.ORDER);
+  const [pendingPickup, setPendingPickup] = useState(null);
+  const [orders, setOrders] = useState([]);
+  const [shippers, setShippers] = useState([]);
+  const [selectedShipperId, setSelectedShipperId] = useState(null);
+  const [orderAssignments, setOrderAssignments] = useState({});
+  const [tourResults, setTourResults] = useState([]);
+  const [status, setStatus] = useState(VRP_STATUS.IDLE);
+  const [errorMessage, setErrorMessage] = useState("");
+  const [avoidRoadTypes, setAvoidRoadTypes] = useState([]);
+
+  const selectedOrderIds = useMemo(() => {
+    if (!selectedShipperId) return [];
+    return Object.entries(orderAssignments)
+      .filter(([, shipperId]) => shipperId === selectedShipperId)
+      .map(([orderId]) => orderId);
+  }, [orderAssignments, selectedShipperId]);
+
+  const resetTour = useCallback(() => {
+    clearTourOnEdit(setTourResults, setStatus, setErrorMessage);
+  }, []);
+
+  const setPickupForNewOrder = useCallback((point) => {
+    setPendingPickup(point);
+    setErrorMessage("");
+  }, []);
+
+  const setDropoffForPendingOrder = useCallback((point) => {
+    if (!pendingPickup) return;
+    const orderId = `o${_nextOrderId++}`;
+    setOrders((prev) => [
+      ...prev,
+      { id: orderId, pickup: pendingPickup, dropoff: point },
+    ]);
+    setPendingPickup(null);
+    resetTour();
+  }, [pendingPickup, resetTour]);
+
+  const cancelPendingPickup = useCallback(() => {
+    setPendingPickup(null);
+    setErrorMessage("");
+  }, []);
+
+  const addShipper = useCallback((point) => {
+    const newShipper = {
+      id: `s${_nextShipperId++}`,
+      location: point,
+    };
+    setShippers((prev) => [...prev, newShipper]);
+    setSelectedShipperId((current) => current ?? newShipper.id);
+    resetTour();
+  }, [resetTour]);
+
+  const removeOrder = useCallback((orderId) => {
+    setOrders((prev) => prev.filter((o) => o.id !== orderId));
+    setOrderAssignments((prev) => {
+      if (!prev[orderId]) return prev;
+      const next = { ...prev };
+      delete next[orderId];
+      return next;
+    });
+    resetTour();
+  }, [resetTour]);
+
+  const removeShipper = useCallback((shipperId) => {
+    setShippers((prev) => {
+      const next = prev.filter((s) => s.id !== shipperId);
+      setSelectedShipperId((current) => {
+        if (current !== shipperId) return current;
+        return next[0]?.id ?? null;
+      });
+      return next;
+    });
+    setOrderAssignments((prev) => {
+      const next = { ...prev };
+      for (const [orderId, ownerId] of Object.entries(next)) {
+        if (ownerId === shipperId) {
+          delete next[orderId];
+        }
+      }
+      return next;
+    });
+    resetTour();
+  }, [resetTour]);
+
+  const clearAll = useCallback(() => {
+    setOrders([]);
+    setShippers([]);
+    setPendingPickup(null);
+    setSelectedShipperId(null);
+    setOrderAssignments({});
+    setTourResults([]);
+    setStatus(VRP_STATUS.IDLE);
+    setErrorMessage("");
+  }, []);
+
+  const selectShipper = useCallback((shipperId) => {
+    setSelectedShipperId(shipperId);
+    resetTour();
+  }, [resetTour]);
+
+  const toggleOrderSelection = useCallback(
+    (orderId) => {
+      if (!selectedShipperId) return;
+      setOrderAssignments((prev) => {
+        const owner = prev[orderId];
+        if (owner === selectedShipperId) {
+          const next = { ...prev };
+          delete next[orderId];
+          return next;
+        }
+        if (owner && owner !== selectedShipperId) {
+          return prev;
+        }
+        return { ...prev, [orderId]: selectedShipperId };
+      });
+      resetTour();
+    },
+    [selectedShipperId, resetTour]
+  );
+
+  const beginRequest = useCallback(() => {
+    setStatus(VRP_STATUS.LOADING);
+    setErrorMessage("");
+  }, []);
+
+  const completeRequest = useCallback((data) => {
+    setTourResults(Array.isArray(data) ? data : [data]);
+    setStatus(VRP_STATUS.SUCCESS);
+    setErrorMessage("");
+  }, []);
+
+  const failRequest = useCallback((message) => {
+    setStatus(VRP_STATUS.ERROR);
+    setErrorMessage(message || "Có lỗi xảy ra.");
+  }, []);
+
+  const getScenarioSnapshot = useCallback(
+    () => ({
+      orders,
+      shippers,
+      selectedShipperId,
+      orderAssignments,
+      avoidRoadTypes,
+    }),
+    [orders, shippers, selectedShipperId, orderAssignments, avoidRoadTypes]
+  );
+
+  const loadScenario = useCallback((payload) => {
+    const nextOrders = payload?.orders ?? [];
+    const nextShippers = payload?.shippers ?? [];
+    syncIdCounters(nextOrders, nextShippers);
+    setOrders(nextOrders);
+    setShippers(nextShippers);
+    setSelectedShipperId(
+      payload?.selectedShipperId ?? nextShippers[0]?.id ?? null
+    );
+    setOrderAssignments(migrateOrderAssignments(payload));
+    setAvoidRoadTypes(payload?.avoidRoadTypes ?? []);
+    setPendingPickup(null);
+    setTourResults([]);
+    setStatus(VRP_STATUS.IDLE);
+    setErrorMessage("");
+  }, []);
+
+  const canOptimize =
+    Object.keys(orderAssignments).length > 0 &&
+    status !== VRP_STATUS.LOADING;
+
+  const orderStep = pendingPickup
+    ? ORDER_STEP.SET_DROPOFF
+    : ORDER_STEP.SET_PICKUP;
+
+  return {
+    placementMode,
+    setPlacementMode,
+    orderStep,
+    pendingPickup,
+    orders,
+    shippers,
+    selectedShipperId,
+    selectedOrderIds,
+    orderAssignments,
+    tourResults,
+    status,
+    errorMessage,
+    avoidRoadTypes,
+    setAvoidRoadTypes,
+    canOptimize,
+    setPickupForNewOrder,
+    setDropoffForPendingOrder,
+    cancelPendingPickup,
+    addShipper,
+    removeOrder,
+    removeShipper,
+    clearAll,
+    selectShipper,
+    toggleOrderSelection,
+    beginRequest,
+    completeRequest,
+    failRequest,
+    getScenarioSnapshot,
+    loadScenario,
+  };
+}
 </file>
 
 <file path="backend/tests/integration/test_route_api.py">
@@ -6519,785 +6757,6 @@ def _point_inside_bbox(latitude: float, longitude: float, bbox: GraphBBox) -> bo
     )
 </file>
 
-<file path="frontend/src/components/PointList.jsx">
-import React from "react";
-import PropTypes from "prop-types";
-import {
-  getDropoffGlyph,
-  getOrderColor,
-  getOrderLabel,
-  getPickupGlyph,
-} from "../utils/orders";
-import { getShipperGlyph, getShipperLabel } from "../utils/shippers";
-import {
-  CoordPropType,
-  OrderPropType,
-  ShipperColorMapPropType,
-  ShipperPropType,
-} from "./proptypes";
-
-function CoordDisplay({ point }) {
-  if (!point) return null;
-  return (
-    <div className="point-coords">
-      {point.latitude.toFixed(6)}, {point.longitude.toFixed(6)}
-    </div>
-  );
-}
-
-CoordDisplay.propTypes = {
-  point: CoordPropType,
-};
-
-export default function PointList({
-  orders,
-  shippers,
-  shipperColorMap,
-  selectedOrderIds,
-  onRemoveOrder,
-  onRemoveShipper,
-}) {
-  const hasContent = orders.length > 0 || shippers.length > 0;
-
-  return (
-    <div className="panel-card">
-      <h2>Điểm đã chọn</h2>
-
-      {!hasContent && <p className="empty-text">Chưa có điểm nào.</p>}
-
-      {shippers.length > 0 && (
-        <>
-          <h3>Shipper ({shippers.length})</h3>
-          {shippers.map((s) => (
-            <div key={s.id} className="point-section">
-              <div>
-                <strong style={{ color: shipperColorMap?.[s.id] ?? "#333" }}>
-                  {getShipperLabel(s.id)}
-                </strong>
-                <span className="order-flow-label"> ({getShipperGlyph(s.id)})</span>
-                <CoordDisplay point={s.location} />
-              </div>
-              <button
-                className="icon-button"
-                onClick={() => onRemoveShipper(s.id)}
-                type="button"
-              >
-                Xóa
-              </button>
-            </div>
-          ))}
-        </>
-      )}
-
-      {orders.length > 0 && (
-        <>
-          <h3>Đơn hàng ({orders.length})</h3>
-          {orders.map((o) => {
-            const color = getOrderColor(o.id, orders);
-            const label = getOrderLabel(o.id);
-            const assigned = selectedOrderIds.includes(o.id);
-            return (
-              <div
-                key={o.id}
-                className={`point-section order-point-section${assigned ? " assigned" : ""}`}
-                style={{ borderLeftColor: color }}
-              >
-                <div>
-                  <strong style={{ color }}>{label}</strong>
-                  <div className="order-flow-label">
-                    {getPickupGlyph(o.id)} → {getDropoffGlyph(o.id)}
-                    {assigned ? " · đã chọn cho shipper" : ""}
-                  </div>
-                  <div className="point-coords">
-                    <span
-                      className="stop-badge order-stop"
-                      style={{ background: `${color}22`, color, borderColor: color }}
-                    >
-                      {getPickupGlyph(o.id)}
-                    </span>{" "}
-                    {o.pickup.latitude.toFixed(6)}, {o.pickup.longitude.toFixed(6)}
-                  </div>
-                  <div className="point-coords">
-                    <span
-                      className="stop-badge order-stop"
-                      style={{ background: `${color}22`, color, borderColor: color }}
-                    >
-                      {getDropoffGlyph(o.id)}
-                    </span>{" "}
-                    {o.dropoff.latitude.toFixed(6)}, {o.dropoff.longitude.toFixed(6)}
-                  </div>
-                </div>
-                <button
-                  className="icon-button"
-                  onClick={() => onRemoveOrder(o.id)}
-                  type="button"
-                >
-                  Xóa
-                </button>
-              </div>
-            );
-          })}
-        </>
-      )}
-    </div>
-  );
-}
-
-PointList.propTypes = {
-  orders: PropTypes.arrayOf(OrderPropType).isRequired,
-  shippers: PropTypes.arrayOf(ShipperPropType).isRequired,
-  shipperColorMap: ShipperColorMapPropType,
-  selectedOrderIds: PropTypes.arrayOf(PropTypes.string).isRequired,
-  onRemoveOrder: PropTypes.func.isRequired,
-  onRemoveShipper: PropTypes.func.isRequired,
-};
-</file>
-
-<file path="frontend/src/App.css">
-:root {
-  /* Colors - Notion-inspired */
-  --color-midnight-ink: #02093a;
-  --color-signal-blue: #0075de;
-  --color-sky-tint: #62aef0;
-  --color-paper-white: #f6f5f4;
-  --color-pure-white: #ffffff;
-  --color-onyx: #000000;
-  --color-warm-gray: #615d59;
-  --color-smoke: #c6c6c5;
-  --color-faint-line: #dddddd;
-  --radius: 0;
-
-  /* Typography */
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  color: var(--color-onyx);
-  background: var(--color-paper-white);
-  line-height: 1.5;
-  font-weight: 400;
-  font-size: 15px;
-}
-
-* {
-  box-sizing: border-box;
-}
-
-html, body, #root {
-  margin: 0;
-  min-height: 100%;
-}
-
-body {
-  min-width: 320px;
-  min-height: 100vh;
-}
-
-button, input, textarea, select {
-  font: inherit;
-}
-
-/* App Shell */
-.app-shell {
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-}
-
-/* Header - Midnight stage */
-.app-header {
-  background: var(--color-midnight-ink);
-  color: var(--color-pure-white);
-  padding: 1.25rem 1.5rem;
-}
-
-.app-header-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  flex-wrap: wrap;
-}
-
-.app-header h1 {
-  margin: 0;
-  font-size: 1.5rem;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-}
-
-.auth-panel {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  flex-wrap: wrap;
-}
-
-.auth-panel--signed-in .auth-user {
-  font-size: 0.875rem;
-  color: var(--color-sky-tint);
-  max-width: 14rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.auth-button {
-  padding: 0.4rem 0.75rem;
-  font-size: 0.8125rem;
-}
-
-.auth-error {
-  margin: 0;
-  font-size: 0.75rem;
-}
-
-.auth-callback {
-  min-height: 100vh;
-  display: grid;
-  place-items: center;
-  padding: 2rem;
-}
-
-.app-header p {
-  margin: 0.35rem 0 0;
-  color: var(--color-sky-tint);
-  font-size: 0.875rem;
-}
-
-/* Content - Paper stage */
-.app-content {
-  flex: 1;
-  display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(320px, 1fr);
-  gap: 1rem;
-  padding: 1rem;
-  background: var(--color-paper-white);
-}
-
-.map-panel, .side-panel {
-  min-height: 70vh;
-}
-
-.map-panel {
-  position: relative;
-}
-
-.map-auth-overlay {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  padding: 1.5rem;
-  background: rgba(2, 9, 58, 0.55);
-  color: var(--color-pure-white);
-  text-align: center;
-  pointer-events: none;
-  z-index: 500;
-}
-
-.auth-gate-card {
-  border: 1px solid var(--color-faint-line);
-}
-
-.scenario-panel .scenario-form {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 0.5rem;
-  margin-bottom: 0.75rem;
-}
-
-.scenario-panel input {
-  border: 1px solid var(--color-faint-line);
-  border-radius: var(--radius);
-  padding: 0.5rem 0.625rem;
-  min-width: 0;
-}
-
-.scenario-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-}
-
-.scenario-list-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-}
-
-.link-button {
-  border: none;
-  background: transparent;
-  color: var(--color-signal-blue);
-  cursor: pointer;
-  padding: 0;
-  text-align: left;
-  font-weight: 500;
-}
-
-.link-button:hover {
-  text-decoration: underline;
-}
-
-/* Map */
-.map-container {
-  width: 100%;
-  height: 100%;
-  min-height: 70vh;
-  border-radius: var(--radius);
-  overflow: hidden;
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
-}
-
-/* Cards */
-.panel-card {
-  background: var(--color-pure-white);
-  border-radius: var(--radius);
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
-  padding: 1rem;
-  margin-bottom: 1rem;
-}
-
-.panel-card h2 {
-  margin: 0 0 0.75rem;
-  font-size: 1rem;
-  font-weight: 600;
-  color: var(--color-onyx);
-}
-
-.panel-card h3 {
-  margin: 1rem 0 0.75rem;
-  font-size: 0.9375rem;
-  font-weight: 600;
-}
-
-/* Controls */
-.controls-card {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-/* Buttons */
-.primary-button,
-.secondary-button,
-.icon-button,
-.mode-button {
-  border: none;
-  border-radius: var(--radius);
-  padding: 0.625rem 1rem;
-  cursor: pointer;
-  transition: opacity 0.2s ease, transform 0.2s ease;
-  font-weight: 500;
-  font-size: 0.875rem;
-}
-
-.primary-button {
-  background: var(--color-signal-blue);
-  color: var(--color-pure-white);
-}
-
-.secondary-button,
-.icon-button {
-  background: var(--color-faint-line);
-  color: var(--color-onyx);
-}
-
-.mode-button {
-  background: var(--color-faint-line);
-  color: var(--color-onyx);
-}
-
-.mode-button-group {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.5rem;
-}
-
-.mode-button.active {
-  background: var(--color-midnight-ink);
-  color: var(--color-pure-white);
-}
-
-.primary-button:hover,
-.secondary-button:hover,
-.icon-button:hover,
-.mode-button:hover {
-  transform: translateY(-1px);
-}
-
-.primary-button:disabled,
-.secondary-button:disabled,
-.icon-button:disabled,
-.mode-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.6;
-  transform: none;
-}
-
-/* Text */
-.helper-text {
-  color: var(--color-warm-gray);
-  margin: 0;
-  font-size: 0.875rem;
-}
-
-.error-text {
-  color: #b91c1c;
-  margin: 0;
-  font-size: 0.875rem;
-}
-
-.empty-text {
-  color: var(--color-warm-gray);
-  margin: 0;
-}
-
-/* Point sections */
-.point-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-.point-item,
-.point-section {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 1rem;
-  border: 1px solid var(--color-faint-line);
-  border-radius: var(--radius);
-  padding: 0.75rem;
-}
-
-.point-section {
-  margin-bottom: 0.75rem;
-}
-
-.point-section-start {
-  border-color: #86efac;
-  background: #f0fdf4;
-}
-
-.point-section-end {
-  border-color: #fecaca;
-  background: #fef2f2;
-}
-
-.point-coords {
-  color: var(--color-warm-gray);
-  font-size: 0.8125rem;
-  margin-top: 0.25rem;
-}
-
-/* Mode Switcher */
-.mode-switcher {
-  display: flex;
-  gap: 0.5rem;
-  margin-bottom: 0.75rem;
-}
-
-.mode-switcher button {
-  flex: 1;
-  padding: 0.5rem;
-  border: 1px solid var(--color-faint-line);
-  border-radius: var(--radius);
-  background: var(--color-pure-white);
-  cursor: pointer;
-  font-weight: 500;
-  font-size: 0.8125rem;
-  transition: all 0.2s;
-}
-
-.mode-switcher button.active {
-  background: var(--color-signal-blue);
-  color: var(--color-pure-white);
-  border-color: var(--color-signal-blue);
-}
-
-/* Options Panel */
-.options-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.options-panel label {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.875rem;
-  cursor: pointer;
-}
-
-/* Fleet Result */
-.fleet-result {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-.fleet-total {
-  font-size: 1.125rem;
-  font-weight: 600;
-  color: var(--color-onyx);
-}
-
-.shipper-tour {
-  border: 1px solid var(--color-faint-line);
-  border-radius: var(--radius);
-  padding: 0.75rem;
-}
-
-.stop-order-id {
-  color: var(--color-warm-gray);
-  font-size: 0.75rem;
-}
-
-.idle-shippers-section {
-  border: 1px dashed var(--color-faint-line);
-  border-radius: var(--radius);
-  padding: 0.75rem;
-  background: #fafafa;
-}
-
-.idle-shippers-section h3 {
-  margin: 0 0 0.5rem;
-  font-size: 0.875rem;
-  color: var(--color-warm-gray);
-}
-
-.shipper-tour-header {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.5rem;
-}
-
-.shipper-color-dot {
-  width: 12px;
-  height: 12px;
-  border-radius: var(--radius);
-  flex-shrink: 0;
-}
-
-.shipper-name {
-  font-weight: 600;
-  font-size: 0.875rem;
-}
-
-.shipper-distance {
-  color: var(--color-warm-gray);
-  font-size: 0.8125rem;
-  margin-left: auto;
-}
-
-.stop-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  font-size: 0.8125rem;
-}
-
-.stop-item {
-  padding: 0.25rem 0;
-  display: flex;
-  align-items: center;
-  gap: 0.375rem;
-}
-
-.stop-badge {
-  display: inline-block;
-  padding: 0.125rem 0.375rem;
-  border-radius: var(--radius);
-  font-size: 0.6875rem;
-  font-weight: 500;
-}
-
-.stop-badge.pickup {
-  background: #dcfce7;
-  color: #166534;
-}
-
-.stop-badge.dropoff {
-  background: #fee2e2;
-  color: #991b1b;
-}
-
-.stop-badge.order-stop {
-  border: 1px solid;
-  font-weight: 700;
-  min-width: 2rem;
-  text-align: center;
-}
-
-.stop-badge.shipper {
-  background: #dbeafe;
-  color: #1d4ed8;
-}
-
-/* Assignment panel */
-.assignment-panel h3 {
-  margin: 1rem 0 0.5rem;
-  font-size: 0.875rem;
-  font-weight: 600;
-  color: var(--color-warm-gray);
-}
-
-.shipper-select-list,
-.order-select-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  margin-bottom: 1rem;
-}
-
-.select-row {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 0.625rem;
-  border: 1px solid var(--color-faint-line);
-  border-radius: var(--radius);
-  cursor: pointer;
-  font-size: 0.875rem;
-}
-
-.select-row input {
-  flex-shrink: 0;
-}
-
-.select-row-label {
-  display: flex;
-  flex-direction: column;
-  gap: 0.125rem;
-}
-
-.order-select-row.selected {
-  background: #fafafa;
-}
-
-.order-color-dot {
-  width: 12px;
-  height: 12px;
-  border-radius: var(--radius);
-  flex-shrink: 0;
-}
-
-.order-route-hint {
-  font-size: 0.75rem;
-  color: var(--color-warm-gray);
-}
-
-.order-point-section {
-  border-left: 4px solid transparent;
-  padding-left: 0.5rem;
-}
-
-.order-point-section.assigned {
-  background: #fafafa;
-}
-
-.order-flow-label {
-  font-size: 0.8125rem;
-  color: var(--color-warm-gray);
-  margin-bottom: 0.25rem;
-}
-
-/* Tour result */
-.tour-result {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-.tour-result-header {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.tour-distance-hero {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  padding: 0.875rem 1rem;
-  border-radius: var(--radius);
-  background: var(--color-midnight-ink);
-  color: var(--color-pure-white);
-}
-
-.tour-distance-label {
-  font-size: 0.75rem;
-  color: var(--color-sky-tint);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.tour-distance-value {
-  font-size: 1.5rem;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-}
-
-/* Unassigned */
-.unassigned-section {
-  border: 1px dashed #fca5a5;
-  border-radius: var(--radius);
-  padding: 0.75rem;
-  background: #fef2f2;
-}
-
-.unassigned-section h3 {
-  color: #991b1b;
-  margin: 0 0 0.5rem;
-}
-
-/* Ranking table */
-.ranking-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.8125rem;
-}
-
-.ranking-table th,
-.ranking-table td {
-  padding: 0.5rem;
-  text-align: left;
-  border-bottom: 1px solid var(--color-faint-line);
-}
-
-.ranking-table th {
-  font-weight: 600;
-  color: var(--color-warm-gray);
-}
-
-.ranking-table tr.recommended {
-  background: #f0fdf4;
-}
-
-/* Responsive */
-@media (max-width: 900px) {
-  .app-content {
-    grid-template-columns: 1fr;
-  }
-
-  .map-panel, .side-panel {
-    min-height: auto;
-  }
-
-  .map-container {
-    min-height: 50vh;
-  }
-}
-</file>
-
 <file path="backend/app/domain/vrp.py">
 from __future__ import annotations
 
@@ -8032,6 +7491,821 @@ class FleetResponse(BaseModel):
     optimal: bool
 </file>
 
+<file path="frontend/src/components/PointList.jsx">
+import React from "react";
+import PropTypes from "prop-types";
+import {
+  getDropoffGlyph,
+  getOrderLabel,
+  getPickupGlyph,
+} from "../utils/orders";
+import { getShipperGlyph, getShipperLabel } from "../utils/shippers";
+import { UNASSIGNED_ORDER_COLOR } from "../hooks/useVrpState";
+import {
+  CoordPropType,
+  OrderAssignmentsPropType,
+  OrderPropType,
+  ShipperColorMapPropType,
+  ShipperPropType,
+} from "./proptypes";
+
+function CoordDisplay({ point }) {
+  if (!point) return null;
+  return (
+    <div className="point-coords">
+      {point.latitude.toFixed(6)}, {point.longitude.toFixed(6)}
+    </div>
+  );
+}
+
+CoordDisplay.propTypes = {
+  point: CoordPropType,
+};
+
+export default function PointList({
+  orders,
+  shippers,
+  shipperColorMap,
+  orderAssignments,
+  onRemoveOrder,
+  onRemoveShipper,
+}) {
+  const hasContent = orders.length > 0 || shippers.length > 0;
+
+  return (
+    <div className="panel-card">
+      <h2>Điểm đã chọn</h2>
+
+      {!hasContent && <p className="empty-text">Chưa có điểm nào.</p>}
+
+      {shippers.length > 0 && (
+        <>
+          <h3>Shipper ({shippers.length})</h3>
+          {shippers.map((s) => (
+            <div key={s.id} className="point-section">
+              <div>
+                <strong style={{ color: shipperColorMap?.[s.id] ?? "#333" }}>
+                  {getShipperLabel(s.id)}
+                </strong>
+                <span className="order-flow-label"> ({getShipperGlyph(s.id)})</span>
+                <CoordDisplay point={s.location} />
+              </div>
+              <button
+                className="icon-button"
+                onClick={() => onRemoveShipper(s.id)}
+                type="button"
+              >
+                Xóa
+              </button>
+            </div>
+          ))}
+        </>
+      )}
+
+      {orders.length > 0 && (
+        <>
+          <h3>Đơn hàng ({orders.length})</h3>
+          {orders.map((o) => {
+            const label = getOrderLabel(o.id);
+            const owner = orderAssignments[o.id];
+            const color = owner
+              ? shipperColorMap?.[owner] ?? UNASSIGNED_ORDER_COLOR
+              : UNASSIGNED_ORDER_COLOR;
+            return (
+              <div
+                key={o.id}
+                className={`point-section order-point-section${owner ? " assigned" : ""}`}
+                style={{ borderLeftColor: color }}
+              >
+                <div>
+                  <strong style={{ color }}>{label}</strong>
+                  <div className="order-flow-label">
+                    {getPickupGlyph(o.id)} → {getDropoffGlyph(o.id)}
+                    {owner
+                      ? ` · gán cho ${getShipperGlyph(owner)}`
+                      : " · chưa gán"}
+                  </div>
+                  <div className="point-coords">
+                    <span
+                      className="stop-badge order-stop"
+                      style={{ background: `${color}22`, color, borderColor: color }}
+                    >
+                      {getPickupGlyph(o.id)}
+                    </span>{" "}
+                    {o.pickup.latitude.toFixed(6)}, {o.pickup.longitude.toFixed(6)}
+                  </div>
+                  <div className="point-coords">
+                    <span
+                      className="stop-badge order-stop"
+                      style={{ background: `${color}22`, color, borderColor: color }}
+                    >
+                      {getDropoffGlyph(o.id)}
+                    </span>{" "}
+                    {o.dropoff.latitude.toFixed(6)}, {o.dropoff.longitude.toFixed(6)}
+                  </div>
+                </div>
+                <button
+                  className="icon-button"
+                  onClick={() => onRemoveOrder(o.id)}
+                  type="button"
+                >
+                  Xóa
+                </button>
+              </div>
+            );
+          })}
+        </>
+      )}
+    </div>
+  );
+}
+
+PointList.propTypes = {
+  orders: PropTypes.arrayOf(OrderPropType).isRequired,
+  shippers: PropTypes.arrayOf(ShipperPropType).isRequired,
+  shipperColorMap: ShipperColorMapPropType,
+  orderAssignments: OrderAssignmentsPropType.isRequired,
+  onRemoveOrder: PropTypes.func.isRequired,
+  onRemoveShipper: PropTypes.func.isRequired,
+};
+</file>
+
+<file path="frontend/src/App.css">
+:root {
+  /* Colors - Notion-inspired */
+  --color-midnight-ink: #02093a;
+  --color-signal-blue: #0075de;
+  --color-sky-tint: #62aef0;
+  --color-paper-white: #f6f5f4;
+  --color-pure-white: #ffffff;
+  --color-onyx: #000000;
+  --color-warm-gray: #615d59;
+  --color-smoke: #c6c6c5;
+  --color-faint-line: #dddddd;
+  --radius: 0;
+
+  /* Typography */
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  color: var(--color-onyx);
+  background: var(--color-paper-white);
+  line-height: 1.5;
+  font-weight: 400;
+  font-size: 15px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+button, input, textarea, select {
+  font: inherit;
+}
+
+/* App Shell */
+.app-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Header - Midnight stage */
+.app-header {
+  background: var(--color-midnight-ink);
+  color: var(--color-pure-white);
+  padding: 1.25rem 1.5rem;
+}
+
+.app-header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.app-header h1 {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.auth-panel {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.auth-panel--signed-in .auth-user {
+  font-size: 0.875rem;
+  color: var(--color-sky-tint);
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.auth-button {
+  padding: 0.4rem 0.75rem;
+  font-size: 0.8125rem;
+}
+
+.auth-error {
+  margin: 0;
+  font-size: 0.75rem;
+}
+
+.auth-callback {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 2rem;
+}
+
+.app-header p {
+  margin: 0.35rem 0 0;
+  color: var(--color-sky-tint);
+  font-size: 0.875rem;
+}
+
+/* Content - Paper stage */
+.app-content {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(320px, 1fr);
+  gap: 1rem;
+  padding: 1rem;
+  background: var(--color-paper-white);
+}
+
+.map-panel, .side-panel {
+  min-height: 70vh;
+}
+
+.map-panel {
+  position: relative;
+}
+
+.map-auth-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  background: rgba(2, 9, 58, 0.55);
+  color: var(--color-pure-white);
+  text-align: center;
+  pointer-events: none;
+  z-index: 500;
+}
+
+.auth-gate-card {
+  border: 1px solid var(--color-faint-line);
+}
+
+.scenario-panel .scenario-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.scenario-panel input {
+  border: 1px solid var(--color-faint-line);
+  border-radius: var(--radius);
+  padding: 0.5rem 0.625rem;
+  min-width: 0;
+}
+
+.scenario-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.scenario-list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.link-button {
+  border: none;
+  background: transparent;
+  color: var(--color-signal-blue);
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+  font-weight: 500;
+}
+
+.link-button:hover {
+  text-decoration: underline;
+}
+
+/* Map */
+.map-container {
+  width: 100%;
+  height: 100%;
+  min-height: 70vh;
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+}
+
+/* Cards */
+.panel-card {
+  background: var(--color-pure-white);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.panel-card h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-onyx);
+}
+
+.panel-card h3 {
+  margin: 1rem 0 0.75rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+/* Controls */
+.controls-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+/* Buttons */
+.primary-button,
+.secondary-button,
+.icon-button,
+.mode-button {
+  border: none;
+  border-radius: var(--radius);
+  padding: 0.625rem 1rem;
+  cursor: pointer;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  font-weight: 500;
+  font-size: 0.875rem;
+}
+
+.primary-button {
+  background: var(--color-signal-blue);
+  color: var(--color-pure-white);
+}
+
+.secondary-button,
+.icon-button {
+  background: var(--color-faint-line);
+  color: var(--color-onyx);
+}
+
+.mode-button {
+  background: var(--color-faint-line);
+  color: var(--color-onyx);
+}
+
+.mode-button-group {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.mode-button.active {
+  background: var(--color-midnight-ink);
+  color: var(--color-pure-white);
+}
+
+.primary-button:hover,
+.secondary-button:hover,
+.icon-button:hover,
+.mode-button:hover {
+  transform: translateY(-1px);
+}
+
+.primary-button:disabled,
+.secondary-button:disabled,
+.icon-button:disabled,
+.mode-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+  transform: none;
+}
+
+/* Text */
+.helper-text {
+  color: var(--color-warm-gray);
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+.error-text {
+  color: #b91c1c;
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+.empty-text {
+  color: var(--color-warm-gray);
+  margin: 0;
+}
+
+/* Point sections */
+.point-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.point-item,
+.point-section {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  border: 1px solid var(--color-faint-line);
+  border-radius: var(--radius);
+  padding: 0.75rem;
+}
+
+.point-section {
+  margin-bottom: 0.75rem;
+}
+
+.point-section-start {
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+
+.point-section-end {
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
+.point-coords {
+  color: var(--color-warm-gray);
+  font-size: 0.8125rem;
+  margin-top: 0.25rem;
+}
+
+/* Mode Switcher */
+.mode-switcher {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.mode-switcher button {
+  flex: 1;
+  padding: 0.5rem;
+  border: 1px solid var(--color-faint-line);
+  border-radius: var(--radius);
+  background: var(--color-pure-white);
+  cursor: pointer;
+  font-weight: 500;
+  font-size: 0.8125rem;
+  transition: all 0.2s;
+}
+
+.mode-switcher button.active {
+  background: var(--color-signal-blue);
+  color: var(--color-pure-white);
+  border-color: var(--color-signal-blue);
+}
+
+/* Options Panel */
+.options-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.options-panel label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+/* Fleet Result */
+.fleet-result {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.fleet-total {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--color-onyx);
+}
+
+.shipper-tour {
+  border: 1px solid var(--color-faint-line);
+  border-radius: var(--radius);
+  padding: 0.75rem;
+}
+
+.stop-order-id {
+  color: var(--color-warm-gray);
+  font-size: 0.75rem;
+}
+
+.idle-shippers-section {
+  border: 1px dashed var(--color-faint-line);
+  border-radius: var(--radius);
+  padding: 0.75rem;
+  background: #fafafa;
+}
+
+.idle-shippers-section h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.875rem;
+  color: var(--color-warm-gray);
+}
+
+.shipper-tour-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.shipper-color-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: var(--radius);
+  flex-shrink: 0;
+}
+
+.shipper-name {
+  font-weight: 600;
+  font-size: 0.875rem;
+}
+
+.shipper-distance {
+  color: var(--color-warm-gray);
+  font-size: 0.8125rem;
+  margin-left: auto;
+}
+
+.stop-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  font-size: 0.8125rem;
+}
+
+.stop-item {
+  padding: 0.25rem 0;
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.stop-badge {
+  display: inline-block;
+  padding: 0.125rem 0.375rem;
+  border-radius: var(--radius);
+  font-size: 0.6875rem;
+  font-weight: 500;
+}
+
+.stop-badge.pickup {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.stop-badge.dropoff {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.stop-badge.order-stop {
+  border: 1px solid;
+  font-weight: 700;
+  min-width: 2rem;
+  text-align: center;
+}
+
+.stop-badge.shipper {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+/* Assignment panel */
+.assignment-panel h3 {
+  margin: 1rem 0 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--color-warm-gray);
+}
+
+.shipper-select-list,
+.order-select-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.select-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--color-faint-line);
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 0.875rem;
+}
+
+.select-row input {
+  flex-shrink: 0;
+}
+
+.select-row-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.order-select-row.selected {
+  background: #fafafa;
+}
+
+.order-select-row.locked {
+  opacity: 0.72;
+  cursor: not-allowed;
+}
+
+.order-select-row.locked input {
+  cursor: not-allowed;
+}
+
+.owner-badge {
+  display: inline-block;
+  margin-top: 0.125rem;
+  padding: 0.125rem 0.375rem;
+  border: 1px solid;
+  border-radius: var(--radius);
+  font-size: 0.6875rem;
+  font-weight: 600;
+}
+
+.multi-tour-result {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.assignment-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.order-color-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: var(--radius);
+  flex-shrink: 0;
+}
+
+.order-route-hint {
+  font-size: 0.75rem;
+  color: var(--color-warm-gray);
+}
+
+.order-point-section {
+  border-left: 4px solid transparent;
+  padding-left: 0.5rem;
+}
+
+.order-point-section.assigned {
+  background: #fafafa;
+}
+
+.order-flow-label {
+  font-size: 0.8125rem;
+  color: var(--color-warm-gray);
+  margin-bottom: 0.25rem;
+}
+
+/* Tour result */
+.tour-result {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.tour-result-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.tour-distance-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.875rem 1rem;
+  border-radius: var(--radius);
+  background: var(--color-midnight-ink);
+  color: var(--color-pure-white);
+}
+
+.tour-distance-label {
+  font-size: 0.75rem;
+  color: var(--color-sky-tint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tour-distance-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+/* Unassigned */
+.unassigned-section {
+  border: 1px dashed #fca5a5;
+  border-radius: var(--radius);
+  padding: 0.75rem;
+  background: #fef2f2;
+}
+
+.unassigned-section h3 {
+  color: #991b1b;
+  margin: 0 0 0.5rem;
+}
+
+/* Ranking table */
+.ranking-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+
+.ranking-table th,
+.ranking-table td {
+  padding: 0.5rem;
+  text-align: left;
+  border-bottom: 1px solid var(--color-faint-line);
+}
+
+.ranking-table th {
+  font-weight: 600;
+  color: var(--color-warm-gray);
+}
+
+.ranking-table tr.recommended {
+  background: #f0fdf4;
+}
+
+/* Responsive */
+@media (max-width: 900px) {
+  .app-content {
+    grid-template-columns: 1fr;
+  }
+
+  .map-panel, .side-panel {
+    min-height: auto;
+  }
+
+  .map-container {
+    min-height: 50vh;
+  }
+}
+</file>
+
 <file path="backend/app/main.py">
 import os
 from contextlib import asynccontextmanager
@@ -8115,7 +8389,6 @@ import PropTypes from "prop-types";
 import { bboxToLeaflet } from "../utils/geo";
 import {
   getDropoffGlyph,
-  getOrderColor,
   getOrderLabel,
   getPickupGlyph,
 } from "../utils/orders";
@@ -8123,12 +8396,15 @@ import {
   getShipperGlyph,
   getShipperLabel,
 } from "../utils/shippers";
+import { buildTourDisplayData } from "../utils/tourDisplay";
+import { UNASSIGNED_ORDER_COLOR } from "../hooks/useVrpState";
 import {
   CoordPropType,
+  OrderAssignmentsPropType,
   OrderPropType,
   ShipperColorMapPropType,
   ShipperPropType,
-  TourResultPropType,
+  TourResultsPropType,
 } from "./proptypes";
 
 delete L.Icon.Default.prototype._getIconUrl;
@@ -8141,16 +8417,22 @@ L.Icon.Default.mergeOptions({
     "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
 });
 
-function pinIcon({ color, glyph, selected = false }) {
+function pinIcon({ color, glyph, selected = false, sequence = null }) {
   const ring = selected
     ? `<circle cx="16" cy="15" r="13" fill="none" stroke="#000" stroke-width="2" opacity="0.35"/>`
     : "";
+  const sequenceBadge =
+    sequence != null
+      ? `<circle cx="26" cy="6" r="8" fill="${color}" stroke="white" stroke-width="1.5"/>
+         <text x="26" y="9.5" text-anchor="middle" font-size="9" font-weight="700" fill="white" font-family="Arial, sans-serif">${sequence}</text>`
+      : "";
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 42" width="32" height="42">
     <path d="M16 1 C8 1 2 7 2 15 C2 25 16 41 16 41 C16 41 30 25 30 15 C30 7 24 1 16 1 Z"
       fill="${color}" stroke="white" stroke-width="2.5"/>
     <circle cx="16" cy="15" r="9" fill="white"/>
     ${ring}
     <text x="16" y="20" text-anchor="middle" font-size="${glyph.length > 2 ? 10 : 12}" font-weight="700" fill="${color}" font-family="Arial, sans-serif">${glyph}</text>
+    ${sequenceBadge}
   </svg>`;
   return L.divIcon({
     className: "marker-pin",
@@ -8223,45 +8505,45 @@ function legToLatLngs(leg) {
   return leg.route_points.map((p) => [p.latitude, p.longitude]);
 }
 
-function orderIdFromLegKind(kind) {
-  if (typeof kind !== "string") return null;
-  const idx = kind.lastIndexOf("_");
-  return idx > 0 ? kind.slice(0, idx) : null;
-}
-
 export default function MapView({
   bounds,
   orders,
   shippers,
   pendingPickup,
-  tourResult,
+  tourResults,
+  orderAssignments,
   selectedShipperId,
-  selectedOrderIds,
   shipperColorMap,
   selectionEnabled,
   onAddPoint,
 }) {
   const rectangleBounds = useMemo(() => bboxToLeaflet(bounds), [bounds]);
 
+  const { stopLookup } = useMemo(
+    () => buildTourDisplayData(tourResults),
+    [tourResults]
+  );
+
   const routeLegs = useMemo(() => {
-    if (!tourResult?.legs?.length) return [];
-    const shipperColor = shipperColorMap?.[tourResult.shipper_id] ?? "#2563eb";
-    return tourResult.legs
-      .filter((leg) => leg.route_points.length > 0)
-      .map((leg, index) => {
-        const orderId = orderIdFromLegKind(leg.kind);
-        const color = orderId
-          ? getOrderColor(orderId, orders)
-          : shipperColor;
-        const isDropoff = leg.kind?.endsWith("_dropoff");
-        return {
-          key: `${leg.kind}-${index}`,
-          points: legToLatLngs(leg),
-          color,
-          dashed: isDropoff,
-        };
-      });
-  }, [tourResult, orders, shipperColorMap]);
+    if (!tourResults?.length) return [];
+    const legs = [];
+    for (const tour of tourResults) {
+      if (!tour.legs?.length) continue;
+      const shipperColor = shipperColorMap?.[tour.shipper_id] ?? "#2563eb";
+      tour.legs
+        .filter((leg) => leg.route_points.length > 0)
+        .forEach((leg, index) => {
+          const isDropoff = leg.kind?.endsWith("_dropoff");
+          legs.push({
+            key: `${tour.shipper_id}-${leg.kind}-${index}`,
+            points: legToLatLngs(leg),
+            color: shipperColor,
+            dashed: isDropoff,
+          });
+        });
+    }
+    return legs;
+  }, [tourResults, shipperColorMap]);
 
   const allRoutePoints = useMemo(
     () => routeLegs.flatMap((leg) => leg.points),
@@ -8269,6 +8551,18 @@ export default function MapView({
   );
 
   const pendingOrderNumber = orders.length + 1;
+
+  const getOrderPinColor = (orderId) => {
+    const owner = orderAssignments[orderId];
+    if (!owner) return UNASSIGNED_ORDER_COLOR;
+    return shipperColorMap?.[owner] ?? UNASSIGNED_ORDER_COLOR;
+  };
+
+  const getStopSequence = (orderId, kind) => {
+    const owner = orderAssignments[orderId];
+    if (!owner) return null;
+    return stopLookup[`${owner}:${orderId}:${kind}`] ?? null;
+  };
 
   return (
     <MapContainer
@@ -8317,9 +8611,12 @@ export default function MapView({
       })}
 
       {orders.map((o) => {
-        const color = getOrderColor(o.id, orders);
+        const color = getOrderPinColor(o.id);
         const label = getOrderLabel(o.id);
-        const selected = selectedOrderIds.includes(o.id);
+        const owner = orderAssignments[o.id];
+        const assignedToActive = owner === selectedShipperId;
+        const pickupSequence = getStopSequence(o.id, "pickup");
+        const dropoffSequence = getStopSequence(o.id, "dropoff");
         return (
           <React.Fragment key={o.id}>
             <Marker
@@ -8327,12 +8624,15 @@ export default function MapView({
               icon={pinIcon({
                 color,
                 glyph: getPickupGlyph(o.id),
-                selected,
+                selected: assignedToActive,
+                sequence: pickupSequence,
               })}
-              zIndexOffset={selected ? 900 : 0}
+              zIndexOffset={assignedToActive ? 900 : 0}
             >
               <Popup>
                 <strong>{label}</strong> — Lấy hàng ({getPickupGlyph(o.id)})
+                {pickupSequence != null ? ` · điểm ${pickupSequence}` : ""}
+                {owner ? ` · ${getShipperGlyph(owner)}` : " · chưa gán"}
               </Popup>
             </Marker>
             <Marker
@@ -8340,12 +8640,15 @@ export default function MapView({
               icon={pinIcon({
                 color,
                 glyph: getDropoffGlyph(o.id),
-                selected,
+                selected: assignedToActive,
+                sequence: dropoffSequence,
               })}
-              zIndexOffset={selected ? 900 : 0}
+              zIndexOffset={assignedToActive ? 900 : 0}
             >
               <Popup>
                 <strong>{label}</strong> — Giao hàng ({getDropoffGlyph(o.id)})
+                {dropoffSequence != null ? ` · điểm ${dropoffSequence}` : ""}
+                {owner ? ` · ${getShipperGlyph(owner)}` : " · chưa gán"}
               </Popup>
             </Marker>
           </React.Fragment>
@@ -8393,353 +8696,13 @@ MapView.propTypes = {
   orders: PropTypes.arrayOf(OrderPropType).isRequired,
   shippers: PropTypes.arrayOf(ShipperPropType).isRequired,
   pendingPickup: CoordPropType,
-  tourResult: TourResultPropType,
+  tourResults: TourResultsPropType,
+  orderAssignments: OrderAssignmentsPropType.isRequired,
   selectedShipperId: PropTypes.string,
-  selectedOrderIds: PropTypes.arrayOf(PropTypes.string).isRequired,
   shipperColorMap: ShipperColorMapPropType,
   selectionEnabled: PropTypes.bool.isRequired,
   onAddPoint: PropTypes.func.isRequired,
 };
-</file>
-
-<file path="frontend/src/App.jsx">
-import React, { useCallback, useMemo } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
-import AuthPanel from "./components/AuthPanel";
-import ScenarioPanel from "./components/ScenarioPanel";
-import { useAuth } from "./hooks/useAuth";
-import MapView from "./components/MapView";
-import ModeSwitcher from "./components/ModeSwitcher";
-import OptionsPanel from "./components/OptionsPanel";
-import ShipperAssignmentPanel from "./components/ShipperAssignmentPanel";
-import TourResultPanel from "./components/TourResultPanel";
-import PointList from "./components/PointList";
-import {
-  ACCEPTED_AREA_DETAIL,
-  getGraphBounds,
-  postTours,
-  API_BASE_URL,
-} from "./api/routeApi";
-import { isInsideBbox } from "./utils/geo";
-import { formatDistance } from "./utils/format";
-import { getOrderLabel } from "./utils/orders";
-import { getShipperGlyph, getShipperLabel } from "./utils/shippers";
-import {
-  PLACEMENT_MODE,
-  VRP_STATUS,
-  useVrpState,
-  getShipperColor,
-} from "./hooks/useVrpState";
-
-const AUTH_REQUIRED_MESSAGE = "Vui lòng đăng nhập Google để tối ưu quãng đường.";
-
-export default function App() {
-  const { configured: authConfigured, loading: authLoading, user } = useAuth();
-  const isAuthenticated = Boolean(user);
-  const canUseVrp = !authConfigured || isAuthenticated;
-
-  const {
-    placementMode,
-    setPlacementMode,
-    orderStep,
-    pendingPickup,
-    orders,
-    shippers,
-    selectedShipperId,
-    selectedOrderIds,
-    tourResult,
-    status,
-    errorMessage,
-    avoidRoadTypes,
-    setAvoidRoadTypes,
-    canOptimize,
-    setPickupForNewOrder,
-    setDropoffForPendingOrder,
-    cancelPendingPickup,
-    addShipper,
-    removeOrder,
-    removeShipper,
-    clearAll,
-    selectShipper,
-    toggleOrderSelection,
-    beginRequest,
-    completeRequest,
-    failRequest,
-    getScenarioSnapshot,
-    loadScenario,
-  } = useVrpState();
-
-  const boundsQuery = useQuery({
-    queryKey: ["graph-bounds"],
-    queryFn: getGraphBounds,
-    staleTime: Infinity,
-    retry: 1,
-  });
-
-  const boundsLoaded = boundsQuery.isSuccess && Boolean(boundsQuery.data?.bbox);
-  const bbox = boundsLoaded ? boundsQuery.data.bbox : null;
-
-  const mutation = useMutation({
-    mutationFn: postTours,
-    onMutate: () => {
-      beginRequest();
-    },
-    onSuccess: (data) => {
-      completeRequest(data);
-    },
-    onError: (error) => {
-      if (error?.status === 401) {
-        failRequest(AUTH_REQUIRED_MESSAGE);
-        return;
-      }
-      failRequest(error?.message || "Có lỗi xảy ra khi tối ưu.");
-    },
-  });
-
-  const handleMapClick = useCallback(
-    (rawPoint) => {
-      if (!boundsLoaded || !canUseVrp) {
-        if (!canUseVrp && authConfigured) {
-          failRequest(AUTH_REQUIRED_MESSAGE);
-        }
-        return;
-      }
-      const candidate = {
-        latitude: rawPoint.lat,
-        longitude: rawPoint.lng,
-      };
-      if (!isInsideBbox(candidate, bbox)) {
-        failRequest(ACCEPTED_AREA_DETAIL);
-        return;
-      }
-
-      if (placementMode === PLACEMENT_MODE.ORDER) {
-        if (pendingPickup) {
-          setDropoffForPendingOrder(candidate);
-        } else {
-          setPickupForNewOrder(candidate);
-        }
-      } else {
-        addShipper(candidate);
-      }
-    },
-    [
-      boundsLoaded,
-      canUseVrp,
-      authConfigured,
-      bbox,
-      placementMode,
-      pendingPickup,
-      setPickupForNewOrder,
-      setDropoffForPendingOrder,
-      addShipper,
-      failRequest,
-    ]
-  );
-
-  const handleOptimize = useCallback(() => {
-    if (!canUseVrp) {
-      failRequest(AUTH_REQUIRED_MESSAGE);
-      return;
-    }
-    if (!canOptimize) return;
-    const shipper = shippers.find((s) => s.id === selectedShipperId);
-    if (!shipper) return;
-
-    const assignedOrders = orders.filter((o) =>
-      selectedOrderIds.includes(o.id)
-    );
-
-    mutation.mutate({
-      shipper: {
-        id: shipper.id,
-        location: shipper.location,
-      },
-      orders: assignedOrders.map((o) => ({
-        id: o.id,
-        pickup: o.pickup,
-        dropoff: o.dropoff,
-      })),
-      options: {
-        avoid_road_types: avoidRoadTypes,
-        avoid_edge_ids: [],
-      },
-    });
-  }, [
-    canUseVrp,
-    canOptimize,
-    mutation,
-    shippers,
-    selectedShipperId,
-    orders,
-    selectedOrderIds,
-    avoidRoadTypes,
-  ]);
-
-  const handlePlacementModeChange = useCallback(
-    (mode) => {
-      if (mode !== PLACEMENT_MODE.ORDER && pendingPickup) {
-        cancelPendingPickup();
-      }
-      setPlacementMode(mode);
-    },
-    [pendingPickup, cancelPendingPickup, setPlacementMode]
-  );
-
-  const statusText = useMemo(() => {
-    if (authConfigured && !authLoading && !isAuthenticated) {
-      return AUTH_REQUIRED_MESSAGE;
-    }
-    if (!boundsLoaded) return "Đang tải vùng hỗ trợ...";
-    if (status === VRP_STATUS.LOADING) return "Đang tối ưu quãng đường...";
-    if (status === VRP_STATUS.ERROR) return errorMessage;
-    if (status === VRP_STATUS.SUCCESS && tourResult) {
-      return `${getShipperGlyph(tourResult.shipper_id)}: ${formatDistance(tourResult.total_distance_meters)} (${selectedOrderIds.length} đơn)`;
-    }
-    return "Chọn shipper, tick đơn cần giao, rồi bấm \"Tối ưu quãng đường\".";
-  }, [
-    authConfigured,
-    authLoading,
-    isAuthenticated,
-    boundsLoaded,
-    status,
-    errorMessage,
-    tourResult,
-    selectedOrderIds.length,
-  ]);
-
-  const shipperColorMap = useMemo(() => {
-    const map = {};
-    shippers.forEach((s, i) => {
-      map[s.id] = getShipperColor(i);
-    });
-    return map;
-  }, [shippers]);
-
-  const selectedOrderLabels = useMemo(
-    () => selectedOrderIds.map((id) => getOrderLabel(id)).join(", "),
-    [selectedOrderIds]
-  );
-
-  return (
-    <div className="app-shell">
-      <header className="app-header">
-        <div className="app-header-top">
-          <h1>VRP Delivery Routing</h1>
-          <AuthPanel />
-        </div>
-        <p>
-          Mỗi đơn P1→D1, P2→D2… mỗi shipper S1, S2… Chọn shipper, tick đơn
-          cần giao, bấm tối ưu để xem quãng đường.
-        </p>
-      </header>
-
-      <main className="app-content">
-        <section className="map-panel">
-          <MapView
-            bounds={bbox}
-            orders={orders}
-            shippers={shippers}
-            pendingPickup={pendingPickup}
-            tourResult={tourResult}
-            selectedShipperId={selectedShipperId}
-            selectedOrderIds={selectedOrderIds}
-            shipperColorMap={shipperColorMap}
-            selectionEnabled={boundsLoaded && canUseVrp}
-            onAddPoint={handleMapClick}
-          />
-          {!canUseVrp && authConfigured && !authLoading ? (
-            <div className="map-auth-overlay">
-              <p>Đăng nhập Google để thêm điểm và tối ưu quãng đường.</p>
-            </div>
-          ) : null}
-        </section>
-
-        <aside className="side-panel">
-          <ScenarioPanel
-            user={user}
-            scenarioSnapshot={getScenarioSnapshot}
-            onLoadScenario={loadScenario}
-            onAddPresetShipper={addShipper}
-          />
-
-          <ModeSwitcher
-            placementMode={placementMode}
-            onPlacementModeChange={handlePlacementModeChange}
-            orderStep={orderStep}
-            onCancelPendingPickup={cancelPendingPickup}
-          />
-
-          <OptionsPanel
-            avoidRoadTypes={avoidRoadTypes}
-            onAvoidRoadTypesChange={setAvoidRoadTypes}
-          />
-
-          <ShipperAssignmentPanel
-            shippers={shippers}
-            orders={orders}
-            selectedShipperId={selectedShipperId}
-            selectedOrderIds={selectedOrderIds}
-            shipperColorMap={shipperColorMap}
-            status={status}
-            canOptimize={canOptimize && canUseVrp}
-            onSelectShipper={selectShipper}
-            onToggleOrder={toggleOrderSelection}
-            onOptimize={handleOptimize}
-          />
-
-          <div className="panel-card controls-card">
-            <button
-              className="secondary-button"
-              onClick={clearAll}
-              disabled={orders.length === 0 && shippers.length === 0}
-              type="button"
-            >
-              Xóa tất cả
-            </button>
-          </div>
-
-          <PointList
-            orders={orders}
-            shippers={shippers}
-            shipperColorMap={shipperColorMap}
-            selectedOrderIds={selectedOrderIds}
-            onRemoveOrder={removeOrder}
-            onRemoveShipper={removeShipper}
-          />
-
-          {status === VRP_STATUS.SUCCESS && tourResult ? (
-            <TourResultPanel
-              tourResult={tourResult}
-              orders={orders}
-              shipperColorMap={shipperColorMap}
-            />
-          ) : (
-            <div className="panel-card">
-              <h2>Trạng thái</h2>
-              <p
-                className={
-                  status === VRP_STATUS.ERROR ? "error-text" : "helper-text"
-                }
-              >
-                {statusText}
-              </p>
-              {selectedShipperId && selectedOrderIds.length > 0 && (
-                <p className="helper-text">
-                  {getShipperGlyph(selectedShipperId)} ({getShipperLabel(selectedShipperId)})
-                  {" "}nhận: {selectedOrderLabels}
-                </p>
-              )}
-              <p className="empty-text" style={{ fontSize: "0.75rem", marginTop: "0.5rem" }}>
-                API: {API_BASE_URL}
-              </p>
-            </div>
-          )}
-        </aside>
-      </main>
-    </div>
-  );
-}
 </file>
 
 <file path="frontend/src/api/routeApi.js">
@@ -8851,6 +8814,385 @@ export const ERROR_MESSAGES = {
 };
 
 export { ACCEPTED_AREA_DETAIL };
+</file>
+
+<file path="frontend/src/App.jsx">
+import React, { useCallback, useMemo } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import AuthPanel from "./components/AuthPanel";
+import ScenarioPanel from "./components/ScenarioPanel";
+import { useAuth } from "./hooks/useAuth";
+import MapView from "./components/MapView";
+import ModeSwitcher from "./components/ModeSwitcher";
+import OptionsPanel from "./components/OptionsPanel";
+import ShipperAssignmentPanel from "./components/ShipperAssignmentPanel";
+import MultiShipperResultPanel from "./components/MultiShipperResultPanel";
+import PointList from "./components/PointList";
+import {
+  ACCEPTED_AREA_DETAIL,
+  getGraphBounds,
+  postTours,
+  API_BASE_URL,
+} from "./api/routeApi";
+import { isInsideBbox } from "./utils/geo";
+import { formatDistance } from "./utils/format";
+import { getOrderLabel } from "./utils/orders";
+import { getShipperGlyph, getShipperLabel } from "./utils/shippers";
+import { buildTourDisplayData } from "./utils/tourDisplay";
+import {
+  PLACEMENT_MODE,
+  VRP_STATUS,
+  useVrpState,
+  getShipperColor,
+} from "./hooks/useVrpState";
+
+const AUTH_REQUIRED_MESSAGE = "Vui lòng đăng nhập Google để tối ưu quãng đường.";
+
+function buildOptimizePayloads({ orderAssignments, orders, shippers, avoidRoadTypes }) {
+  const groups = {};
+  for (const [orderId, shipperId] of Object.entries(orderAssignments)) {
+    const order = orders.find((o) => o.id === orderId);
+    if (!order) continue;
+    if (!groups[shipperId]) groups[shipperId] = [];
+    groups[shipperId].push(order);
+  }
+
+  return Object.entries(groups)
+    .map(([shipperId, assignedOrders]) => {
+      const shipper = shippers.find((s) => s.id === shipperId);
+      if (!shipper) return null;
+      return {
+        shipper: {
+          id: shipper.id,
+          location: shipper.location,
+        },
+        orders: assignedOrders.map((o) => ({
+          id: o.id,
+          pickup: o.pickup,
+          dropoff: o.dropoff,
+        })),
+        options: {
+          avoid_road_types: avoidRoadTypes,
+          avoid_edge_ids: [],
+        },
+      };
+    })
+    .filter(Boolean);
+}
+
+export default function App() {
+  const { configured: authConfigured, loading: authLoading, user } = useAuth();
+  const isAuthenticated = Boolean(user);
+  const canUseVrp = !authConfigured || isAuthenticated;
+
+  const {
+    placementMode,
+    setPlacementMode,
+    orderStep,
+    pendingPickup,
+    orders,
+    shippers,
+    selectedShipperId,
+    selectedOrderIds,
+    orderAssignments,
+    tourResults,
+    status,
+    errorMessage,
+    avoidRoadTypes,
+    setAvoidRoadTypes,
+    canOptimize,
+    setPickupForNewOrder,
+    setDropoffForPendingOrder,
+    cancelPendingPickup,
+    addShipper,
+    removeOrder,
+    removeShipper,
+    clearAll,
+    selectShipper,
+    toggleOrderSelection,
+    beginRequest,
+    completeRequest,
+    failRequest,
+    getScenarioSnapshot,
+    loadScenario,
+  } = useVrpState();
+
+  const boundsQuery = useQuery({
+    queryKey: ["graph-bounds"],
+    queryFn: getGraphBounds,
+    staleTime: Infinity,
+    retry: 1,
+  });
+
+  const boundsLoaded = boundsQuery.isSuccess && Boolean(boundsQuery.data?.bbox);
+  const bbox = boundsLoaded ? boundsQuery.data.bbox : null;
+
+  const mutation = useMutation({
+    mutationFn: (payloads) => Promise.all(payloads.map(postTours)),
+    onMutate: () => {
+      beginRequest();
+    },
+    onSuccess: (data) => {
+      completeRequest(data);
+    },
+    onError: (error) => {
+      if (error?.status === 401) {
+        failRequest(AUTH_REQUIRED_MESSAGE);
+        return;
+      }
+      failRequest(error?.message || "Có lỗi xảy ra khi tối ưu.");
+    },
+  });
+
+  const handleMapClick = useCallback(
+    (rawPoint) => {
+      if (!boundsLoaded || !canUseVrp) {
+        if (!canUseVrp && authConfigured) {
+          failRequest(AUTH_REQUIRED_MESSAGE);
+        }
+        return;
+      }
+      const candidate = {
+        latitude: rawPoint.lat,
+        longitude: rawPoint.lng,
+      };
+      if (!isInsideBbox(candidate, bbox)) {
+        failRequest(ACCEPTED_AREA_DETAIL);
+        return;
+      }
+
+      if (placementMode === PLACEMENT_MODE.ORDER) {
+        if (pendingPickup) {
+          setDropoffForPendingOrder(candidate);
+        } else {
+          setPickupForNewOrder(candidate);
+        }
+      } else {
+        addShipper(candidate);
+      }
+    },
+    [
+      boundsLoaded,
+      canUseVrp,
+      authConfigured,
+      bbox,
+      placementMode,
+      pendingPickup,
+      setPickupForNewOrder,
+      setDropoffForPendingOrder,
+      addShipper,
+      failRequest,
+    ]
+  );
+
+  const handleOptimize = useCallback(() => {
+    if (!canUseVrp) {
+      failRequest(AUTH_REQUIRED_MESSAGE);
+      return;
+    }
+    if (!canOptimize) return;
+
+    const payloads = buildOptimizePayloads({
+      orderAssignments,
+      orders,
+      shippers,
+      avoidRoadTypes,
+    });
+    if (payloads.length === 0) return;
+
+    mutation.mutate(payloads);
+  }, [
+    canUseVrp,
+    canOptimize,
+    mutation,
+    orderAssignments,
+    orders,
+    shippers,
+    avoidRoadTypes,
+    failRequest,
+  ]);
+
+  const handlePlacementModeChange = useCallback(
+    (mode) => {
+      if (mode !== PLACEMENT_MODE.ORDER && pendingPickup) {
+        cancelPendingPickup();
+      }
+      setPlacementMode(mode);
+    },
+    [pendingPickup, cancelPendingPickup, setPlacementMode]
+  );
+
+  const { totalDistanceMeters } = useMemo(
+    () => buildTourDisplayData(tourResults),
+    [tourResults]
+  );
+
+  const assignedOrderCount = Object.keys(orderAssignments).length;
+
+  const statusText = useMemo(() => {
+    if (authConfigured && !authLoading && !isAuthenticated) {
+      return AUTH_REQUIRED_MESSAGE;
+    }
+    if (!boundsLoaded) return "Đang tải vùng hỗ trợ...";
+    if (status === VRP_STATUS.LOADING) return "Đang tối ưu quãng đường...";
+    if (status === VRP_STATUS.ERROR) return errorMessage;
+    if (status === VRP_STATUS.SUCCESS && tourResults.length > 0) {
+      return `Tổng ${formatDistance(totalDistanceMeters)} · ${assignedOrderCount} đơn · ${tourResults.length} shipper`;
+    }
+    return 'Chọn shipper, tick đơn cần giao, rồi bấm "Tối ưu tất cả shipper".';
+  }, [
+    authConfigured,
+    authLoading,
+    isAuthenticated,
+    boundsLoaded,
+    status,
+    errorMessage,
+    tourResults.length,
+    totalDistanceMeters,
+    assignedOrderCount,
+  ]);
+
+  const shipperColorMap = useMemo(() => {
+    const map = {};
+    shippers.forEach((s, i) => {
+      map[s.id] = getShipperColor(i);
+    });
+    return map;
+  }, [shippers]);
+
+  const assignmentSummary = useMemo(() => {
+    const byShipper = {};
+    for (const [orderId, shipperId] of Object.entries(orderAssignments)) {
+      if (!byShipper[shipperId]) byShipper[shipperId] = [];
+      byShipper[shipperId].push(getOrderLabel(orderId));
+    }
+    return byShipper;
+  }, [orderAssignments]);
+
+  return (
+    <div className="app-shell">
+      <header className="app-header">
+        <div className="app-header-top">
+          <h1>VRP Delivery Routing</h1>
+          <AuthPanel />
+        </div>
+        <p>
+          Mỗi đơn P1→D1, P2→D2… mỗi shipper S1, S2… Gán đơn cho từng shipper,
+          bấm tối ưu để xem nhiều tuyến màu khác nhau trên bản đồ.
+        </p>
+      </header>
+
+      <main className="app-content">
+        <section className="map-panel">
+          <MapView
+            bounds={bbox}
+            orders={orders}
+            shippers={shippers}
+            pendingPickup={pendingPickup}
+            tourResults={tourResults}
+            orderAssignments={orderAssignments}
+            selectedShipperId={selectedShipperId}
+            shipperColorMap={shipperColorMap}
+            selectionEnabled={boundsLoaded && canUseVrp}
+            onAddPoint={handleMapClick}
+          />
+          {!canUseVrp && authConfigured && !authLoading ? (
+            <div className="map-auth-overlay">
+              <p>Đăng nhập Google để thêm điểm và tối ưu quãng đường.</p>
+            </div>
+          ) : null}
+        </section>
+
+        <aside className="side-panel">
+          <ScenarioPanel
+            user={user}
+            scenarioSnapshot={getScenarioSnapshot}
+            onLoadScenario={loadScenario}
+            onAddPresetShipper={addShipper}
+          />
+
+          <ModeSwitcher
+            placementMode={placementMode}
+            onPlacementModeChange={handlePlacementModeChange}
+            orderStep={orderStep}
+            onCancelPendingPickup={cancelPendingPickup}
+          />
+
+          <OptionsPanel
+            avoidRoadTypes={avoidRoadTypes}
+            onAvoidRoadTypesChange={setAvoidRoadTypes}
+          />
+
+          <ShipperAssignmentPanel
+            shippers={shippers}
+            orders={orders}
+            selectedShipperId={selectedShipperId}
+            selectedOrderIds={selectedOrderIds}
+            orderAssignments={orderAssignments}
+            shipperColorMap={shipperColorMap}
+            status={status}
+            canOptimize={canOptimize && canUseVrp}
+            onSelectShipper={selectShipper}
+            onToggleOrder={toggleOrderSelection}
+            onOptimize={handleOptimize}
+          />
+
+          <div className="panel-card controls-card">
+            <button
+              className="secondary-button"
+              onClick={clearAll}
+              disabled={orders.length === 0 && shippers.length === 0}
+              type="button"
+            >
+              Xóa tất cả
+            </button>
+          </div>
+
+          <PointList
+            orders={orders}
+            shippers={shippers}
+            shipperColorMap={shipperColorMap}
+            orderAssignments={orderAssignments}
+            onRemoveOrder={removeOrder}
+            onRemoveShipper={removeShipper}
+          />
+
+          {status === VRP_STATUS.SUCCESS && tourResults.length > 0 ? (
+            <MultiShipperResultPanel
+              tourResults={tourResults}
+              orders={orders}
+              shipperColorMap={shipperColorMap}
+            />
+          ) : (
+            <div className="panel-card">
+              <h2>Trạng thái</h2>
+              <p
+                className={
+                  status === VRP_STATUS.ERROR ? "error-text" : "helper-text"
+                }
+              >
+                {statusText}
+              </p>
+              {Object.keys(assignmentSummary).length > 0 && (
+                <div className="assignment-summary">
+                  {Object.entries(assignmentSummary).map(([shipperId, labels]) => (
+                    <p key={shipperId} className="helper-text">
+                      {getShipperGlyph(shipperId)} ({getShipperLabel(shipperId)}
+                      ) nhận: {labels.join(", ")}
+                    </p>
+                  ))}
+                </div>
+              )}
+              <p className="empty-text" style={{ fontSize: "0.75rem", marginTop: "0.5rem" }}>
+                API: {API_BASE_URL}
+              </p>
+            </div>
+          )}
+        </aside>
+      </main>
+    </div>
+  );
+}
 </file>
 
 <file path="backend/app/routers/route_api.py">

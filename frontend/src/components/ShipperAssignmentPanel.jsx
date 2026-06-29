@@ -2,6 +2,7 @@ import React from "react";
 import PropTypes from "prop-types";
 import { VRP_STATUS } from "../hooks/useVrpState";
 import {
+  getOrderDisplayColor,
   getOrderLabel,
   getPickupGlyph,
   getDropoffGlyph,
@@ -103,9 +104,12 @@ export default function ShipperAssignmentPanel({
                 <span
                   className="order-color-dot"
                   style={{
-                    background: owner
-                      ? shipperColorMap?.[owner] ?? "#9ca3af"
-                      : "#d1d5db",
+                    background: getOrderDisplayColor(
+                      order.id,
+                      orders,
+                      orderAssignments,
+                      shipperColorMap
+                    ),
                   }}
                 />
                 <span className="select-row-label">

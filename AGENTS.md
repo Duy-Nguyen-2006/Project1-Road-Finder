@@ -17,7 +17,20 @@ This repo uses Harness. Before work, read:
 Use the Rust Harness CLI at `scripts/bin/harness-cli` on macOS/Linux or
 `scripts/bin/harness-cli.exe` on Windows as the main operational tool.
 <!-- HARNESS:END -->
-- Rule: Luôn có câu "Sax báo cáo" ở cuối mỗi câu trả lời
+
+## Deploy
+
+Sau khi hoàn thành thay đổi code (feature, fix, refactor có ảnh hưởng app), agent **bắt buộc**:
+
+1. **Commit** các thay đổi với message rõ ràng.
+2. **Push** lên GitHub (`origin/main`).
+3. **Deploy** lên Vercel — push `main` kích hoạt deploy tự động; xác nhận deployment thành công (production: `https://road-finder.vercel.app`).
+
+Không kết thúc task code mà chưa push và chưa xác nhận Vercel deploy xong.
+
+## Rules
+
+- Luôn có câu "Sax báo cáo" ở cuối mỗi câu trả lời.
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence

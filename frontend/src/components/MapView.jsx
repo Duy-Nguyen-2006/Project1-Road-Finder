@@ -14,6 +14,7 @@ import PropTypes from "prop-types";
 import { bboxToLeaflet } from "../utils/geo";
 import {
   getDropoffGlyph,
+  getOrderDisplayColor,
   getOrderLabel,
   getPickupGlyph,
 } from "../utils/orders";
@@ -22,7 +23,6 @@ import {
   getShipperLabel,
 } from "../utils/shippers";
 import { buildTourDisplayData } from "../utils/tourDisplay";
-import { UNASSIGNED_ORDER_COLOR } from "../hooks/useVrpState";
 import {
   CoordPropType,
   OrderAssignmentsPropType,
@@ -177,12 +177,6 @@ export default function MapView({
 
   const pendingOrderNumber = orders.length + 1;
 
-  const getOrderPinColor = (orderId) => {
-    const owner = orderAssignments[orderId];
-    if (!owner) return UNASSIGNED_ORDER_COLOR;
-    return shipperColorMap?.[owner] ?? UNASSIGNED_ORDER_COLOR;
-  };
-
   const getStopSequence = (orderId, kind) => {
     const owner = orderAssignments[orderId];
     if (!owner) return null;
@@ -236,7 +230,12 @@ export default function MapView({
       })}
 
       {orders.map((o) => {
-        const color = getOrderPinColor(o.id);
+        const color = getOrderDisplayColor(
+          o.id,
+          orders,
+          orderAssignments,
+          shipperColorMap
+        );
         const label = getOrderLabel(o.id);
         const owner = orderAssignments[o.id];
         const assignedToActive = owner === selectedShipperId;

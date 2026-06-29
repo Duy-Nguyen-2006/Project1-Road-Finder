@@ -41,3 +41,17 @@ export function buildOrderColorMap(orders) {
   });
   return map;
 }
+
+/** Màu hiển thị đơn: palette riêng khi chưa gán, màu shipper khi đã gán. */
+export function getOrderDisplayColor(
+  orderId,
+  orders,
+  orderAssignments = {},
+  shipperColorMap = {}
+) {
+  const owner = orderAssignments[orderId];
+  if (owner) {
+    return shipperColorMap[owner] ?? getOrderColor(orderId, orders);
+  }
+  return getOrderColor(orderId, orders);
+}

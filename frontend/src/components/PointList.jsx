@@ -2,11 +2,11 @@ import React from "react";
 import PropTypes from "prop-types";
 import {
   getDropoffGlyph,
+  getOrderDisplayColor,
   getOrderLabel,
   getPickupGlyph,
 } from "../utils/orders";
 import { getShipperGlyph, getShipperLabel } from "../utils/shippers";
-import { UNASSIGNED_ORDER_COLOR } from "../hooks/useVrpState";
 import {
   CoordPropType,
   OrderAssignmentsPropType,
@@ -74,9 +74,12 @@ export default function PointList({
           {orders.map((o) => {
             const label = getOrderLabel(o.id);
             const owner = orderAssignments[o.id];
-            const color = owner
-              ? shipperColorMap?.[owner] ?? UNASSIGNED_ORDER_COLOR
-              : UNASSIGNED_ORDER_COLOR;
+            const color = getOrderDisplayColor(
+              o.id,
+              orders,
+              orderAssignments,
+              shipperColorMap
+            );
             return (
               <div
                 key={o.id}
