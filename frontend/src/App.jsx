@@ -83,12 +83,11 @@ export default function App() {
       completeRequest(data);
     },
     onError: (error) => {
-      const message = error?.message || "Có lỗi xảy ra khi tối ưu.";
-      if (message.includes("Thiếu token") || message.includes("401")) {
+      if (error?.status === 401) {
         failRequest(AUTH_REQUIRED_MESSAGE);
         return;
       }
-      failRequest(message);
+      failRequest(error?.message || "Có lỗi xảy ra khi tối ưu.");
     },
   });
 

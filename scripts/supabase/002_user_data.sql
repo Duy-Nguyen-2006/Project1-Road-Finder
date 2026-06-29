@@ -42,7 +42,8 @@ create policy "saved_scenarios_insert_own"
 
 create policy "saved_scenarios_update_own"
   on public.saved_scenarios for update
-  using (auth.uid() = user_id);
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
 
 create policy "saved_scenarios_delete_own"
   on public.saved_scenarios for delete
@@ -58,7 +59,8 @@ create policy "shipper_presets_insert_own"
 
 create policy "shipper_presets_update_own"
   on public.shipper_presets for update
-  using (auth.uid() = user_id);
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
 
 create policy "shipper_presets_delete_own"
   on public.shipper_presets for delete

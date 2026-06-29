@@ -12,6 +12,14 @@ function networkErrorMessage(cause) {
   return `Không kết nối được backend tại ${API_BASE_URL}. Hãy chắc chắn backend đang chạy (uvicorn app.main:app --port 8000) và CORS cho phép origin này. (${cause?.message ?? cause})`;
 }
 
+export class ApiError extends Error {
+  constructor(message, status) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 async function parseError(response) {
   const body = await parseJsonBody(response);
   if (typeof body?.detail === "string") {
@@ -46,7 +54,7 @@ async function postJson(url, data) {
     throw new Error(networkErrorMessage(err));
   }
   if (!response.ok) {
-    throw new Error(await parseError(response));
+    throw new ApiError(await parseError(response), response.status);
   }
   return response.json();
 }
@@ -60,7 +68,7 @@ async function getJson(url) {
     throw new Error(networkErrorMessage(err));
   }
   if (!response.ok) {
-    throw new Error(await parseError(response));
+    throw new ApiError(await parseError(response), response.status);
   }
   return response.json();
 }

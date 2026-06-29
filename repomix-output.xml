@@ -113,6 +113,7 @@ backend/
       test_route_reconstruction.py
       test_routing_options_thresholds.py
       test_snapper.py
+      test_supabase_jwt.py
       test_vrp.py
   requirements.txt
 frontend/
@@ -156,6 +157,76 @@ vercel.json
 
 <files>
 This section contains the contents of the repository's files.
+
+<file path="backend/tests/unit/test_supabase_jwt.py">
+import time
+
+import jwt
+import pytest
+
+from app.auth.supabase_jwt import verify_access_token
+from app.domain.errors import AuthError
+
+
+SUPABASE_URL = "https://example.supabase.co"
+JWT_SECRET = "test-jwt-secret-for-hs256"
+
+
+def _hs256_token(
+    *,
+    secret: str = JWT_SECRET,
+    sub: str = "user-123",
+    expired: bool = False,
+) -> str:
+    now = int(time.time())
+    payload = {
+        "sub": sub,
+        "aud": "authenticated",
+        "iss": f"{SUPABASE_URL}/auth/v1",
+        "exp": now - 10 if expired else now + 3600,
+        "iat": now,
+    }
+    return jwt.encode(payload, secret, algorithm="HS256")
+
+
+@pytest.fixture(autouse=True)
+def supabase_env(monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", SUPABASE_URL)
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", JWT_SECRET)
+
+
+def test_verify_hs256_token_success():
+    token = _hs256_token()
+    claims = verify_access_token(token)
+    assert claims["sub"] == "user-123"
+    assert claims["aud"] == "authenticated"
+
+
+def test_verify_hs256_expired_token():
+    token = _hs256_token(expired=True)
+    with pytest.raises(AuthError, match="Token đã hết hạn"):
+        verify_access_token(token)
+
+
+def test_verify_hs256_invalid_signature():
+    token = _hs256_token(secret="wrong-secret")
+    with pytest.raises(AuthError, match="Token không hợp lệ"):
+        verify_access_token(token)
+
+
+def test_verify_hs256_missing_secret(monkeypatch):
+    monkeypatch.delenv("SUPABASE_JWT_SECRET", raising=False)
+    token = _hs256_token()
+    with pytest.raises(AuthError, match="SUPABASE_JWT_SECRET is not configured"):
+        verify_access_token(token)
+
+
+def test_verify_missing_supabase_url(monkeypatch):
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    token = _hs256_token()
+    with pytest.raises(AuthError, match="SUPABASE_URL is not configured"):
+        verify_access_token(token)
+</file>
 
 <file path="backend/app/application/graph_bounds.py">
 from __future__ import annotations
@@ -275,7 +346,7 @@ import os
 from functools import lru_cache
 
 import jwt
-from jwt import PyJWKClient
+from jwt import PyJWKClient, PyJWKClientError
 
 from app.domain.errors import AuthError
 
@@ -292,21 +363,45 @@ def _jwks_client() -> PyJWKClient:
     return PyJWKClient(f"{_supabase_url()}/auth/v1/.well-known/jwks.json")
 
 
+def _decode_hs256(token: str) -> dict:
+    secret = os.environ.get("SUPABASE_JWT_SECRET", "").strip()
+    if not secret:
+        raise AuthError("SUPABASE_JWT_SECRET is not configured for HS256 tokens")
+    return jwt.decode(
+        token,
+        secret,
+        algorithms=["HS256"],
+        audience="authenticated",
+        issuer=f"{_supabase_url()}/auth/v1",
+    )
+
+
+def _decode_asymmetric(token: str) -> dict:
+    signing_key = _jwks_client().get_signing_key_from_jwt(token)
+    return jwt.decode(
+        token,
+        signing_key.key,
+        algorithms=["ES256", "RS256"],
+        audience="authenticated",
+        issuer=f"{_supabase_url()}/auth/v1",
+    )
+
+
 def verify_access_token(token: str) -> dict:
     """Verify a Supabase-issued JWT and return its claims."""
     try:
-        signing_key = _jwks_client().get_signing_key_from_jwt(token)
-        return jwt.decode(
-            token,
-            signing_key.key,
-            algorithms=["ES256", "HS256", "RS256"],
-            audience="authenticated",
-            issuer=f"{_supabase_url()}/auth/v1",
-        )
+        header = jwt.get_unverified_header(token)
+        if header.get("alg") == "HS256":
+            return _decode_hs256(token)
+        return _decode_asymmetric(token)
     except jwt.ExpiredSignatureError as exc:
         raise AuthError("Token đã hết hạn") from exc
-    except jwt.InvalidTokenError as exc:
+    except AuthError:
+        raise
+    except (jwt.InvalidTokenError, PyJWKClientError) as exc:
         raise AuthError("Token không hợp lệ") from exc
+    except Exception as exc:
+        raise AuthError("Không xác thực được token") from exc
 </file>
 
 <file path="backend/app/domain/protocols.py">
@@ -1555,7 +1650,7 @@ export const supabase = isSupabaseConfigured
       auth: {
         persistSession: true,
         autoRefreshToken: true,
-        detectSessionInUrl: true,
+        detectSessionInUrl: false,
       },
     })
   : null;
@@ -7977,7 +8072,7 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=cors_origins,
         allow_origin_regex=r"https://.*\.vercel\.app",
-        allow_credentials=True,
+        allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -8393,12 +8488,11 @@ export default function App() {
       completeRequest(data);
     },
     onError: (error) => {
-      const message = error?.message || "Có lỗi xảy ra khi tối ưu.";
-      if (message.includes("Thiếu token") || message.includes("401")) {
+      if (error?.status === 401) {
         failRequest(AUTH_REQUIRED_MESSAGE);
         return;
       }
-      failRequest(message);
+      failRequest(error?.message || "Có lỗi xảy ra khi tối ưu.");
     },
   });
 
@@ -8663,6 +8757,14 @@ function networkErrorMessage(cause) {
   return `Không kết nối được backend tại ${API_BASE_URL}. Hãy chắc chắn backend đang chạy (uvicorn app.main:app --port 8000) và CORS cho phép origin này. (${cause?.message ?? cause})`;
 }
 
+export class ApiError extends Error {
+  constructor(message, status) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 async function parseError(response) {
   const body = await parseJsonBody(response);
   if (typeof body?.detail === "string") {
@@ -8697,7 +8799,7 @@ async function postJson(url, data) {
     throw new Error(networkErrorMessage(err));
   }
   if (!response.ok) {
-    throw new Error(await parseError(response));
+    throw new ApiError(await parseError(response), response.status);
   }
   return response.json();
 }
@@ -8711,7 +8813,7 @@ async function getJson(url) {
     throw new Error(networkErrorMessage(err));
   }
   if (!response.ok) {
-    throw new Error(await parseError(response));
+    throw new ApiError(await parseError(response), response.status);
   }
   return response.json();
 }
