@@ -54,6 +54,10 @@ backend/
       health.py
       node_lookup.py
       snap_service.py
+    auth/
+      __init__.py
+      dependencies.py
+      supabase_jwt.py
     domain/
       assignment.py
       cost_model.py
@@ -76,6 +80,7 @@ backend/
       point.py
       route_models.py
     routers/
+      auth_api.py
       route_api.py
     services/
       leg_builder.py
@@ -88,11 +93,13 @@ backend/
     main.py
   tests/
     integration/
+      conftest.py
       test_no_external_runtime.py
       test_route_api.py
     unit/
       test_api_errors.py
       test_assignment_tour.py
+      test_auth_api.py
       test_cost_model.py
       test_dijkstra.py
       test_directed_graph.py
@@ -100,6 +107,7 @@ backend/
       test_graph_runtime.py
       test_health_cache_sequence.py
       test_health_payload.py
+      test_protected_routes.py
       test_review_fixes.py
       test_route_cache.py
       test_route_reconstruction.py
@@ -110,18 +118,27 @@ backend/
 frontend/
   src/
     api/
+      authHeaders.js
       routeApi.js
     components/
+      AuthPanel.jsx
       FleetResultPanel.jsx
       MapView.jsx
       ModeSwitcher.jsx
       OptionsPanel.jsx
       PointList.jsx
       proptypes.js
+      ScenarioPanel.jsx
       ShipperAssignmentPanel.jsx
       TourResultPanel.jsx
     hooks/
+      useAuth.js
+      useUserData.js
       useVrpState.js
+    lib/
+      supabase.js
+    pages/
+      AuthCallback.jsx
     utils/
       format.js
       geo.js
@@ -139,29 +156,6 @@ vercel.json
 
 <files>
 This section contains the contents of the repository's files.
-
-<file path="api/index.py">
-"""Vercel serverless entry for the FastAPI backend."""
-
-from __future__ import annotations
-
-import os
-import sys
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parent.parent
-BACKEND_ROOT = ROOT / "backend"
-GRAPH_PATH = BACKEND_ROOT / "app" / "data" / "road_graph.hcm-v2-uw.json"
-
-sys.path.insert(0, str(BACKEND_ROOT))
-os.environ.setdefault("ROAD_FINDER_GRAPH_PATH", str(GRAPH_PATH))
-
-from app.application.graph_runtime import build_graph_runtime
-from app.main import create_app
-
-app = create_app()
-app.state.graph_runtime = build_graph_runtime(Path(os.environ["ROAD_FINDER_GRAPH_PATH"]))
-</file>
 
 <file path="backend/app/application/graph_bounds.py">
 from __future__ import annotations
@@ -224,6 +218,95 @@ class GraphNodeLookup:
     def node_coordinate(self, node_id: str) -> tuple[float, float]:
         node = self.nodes[node_id]
         return (node.latitude, node.longitude)
+</file>
+
+<file path="backend/app/auth/__init__.py">
+
+</file>
+
+<file path="backend/app/auth/dependencies.py">
+from __future__ import annotations
+
+from typing import Annotated
+
+from fastapi import Header, HTTPException
+
+from app.auth.supabase_jwt import verify_access_token
+from app.domain.errors import AuthError
+
+
+def _extract_bearer(authorization: str | None) -> str | None:
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    token = authorization[7:].strip()
+    return token or None
+
+
+def optional_current_user(
+    authorization: Annotated[str | None, Header()] = None,
+) -> dict | None:
+    """Return JWT claims when a valid Bearer token is present; else None."""
+    token = _extract_bearer(authorization)
+    if token is None:
+        return None
+    try:
+        return verify_access_token(token)
+    except AuthError:
+        return None
+
+
+def require_current_user(
+    authorization: Annotated[str | None, Header()] = None,
+) -> dict:
+    """Require a valid Supabase JWT; raise 401 otherwise."""
+    token = _extract_bearer(authorization)
+    if token is None:
+        raise HTTPException(status_code=401, detail="Thiếu token đăng nhập")
+    try:
+        return verify_access_token(token)
+    except AuthError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+</file>
+
+<file path="backend/app/auth/supabase_jwt.py">
+from __future__ import annotations
+
+import os
+from functools import lru_cache
+
+import jwt
+from jwt import PyJWKClient
+
+from app.domain.errors import AuthError
+
+
+def _supabase_url() -> str:
+    url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    if not url:
+        raise AuthError("SUPABASE_URL is not configured")
+    return url
+
+
+@lru_cache(maxsize=1)
+def _jwks_client() -> PyJWKClient:
+    return PyJWKClient(f"{_supabase_url()}/auth/v1/.well-known/jwks.json")
+
+
+def verify_access_token(token: str) -> dict:
+    """Verify a Supabase-issued JWT and return its claims."""
+    try:
+        signing_key = _jwks_client().get_signing_key_from_jwt(token)
+        return jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=["ES256", "HS256", "RS256"],
+            audience="authenticated",
+            issuer=f"{_supabase_url()}/auth/v1",
+        )
+    except jwt.ExpiredSignatureError as exc:
+        raise AuthError("Token đã hết hạn") from exc
+    except jwt.InvalidTokenError as exc:
+        raise AuthError("Token không hợp lệ") from exc
 </file>
 
 <file path="backend/app/domain/protocols.py">
@@ -301,8 +384,111 @@ def two_opt_improve(
     return current
 </file>
 
+<file path="backend/app/routers/auth_api.py">
+from fastapi import APIRouter, Depends
+
+from app.auth.dependencies import optional_current_user, require_current_user
+
+router = APIRouter()
+
+
+@router.get("/auth/me")
+def auth_me(user: dict = Depends(require_current_user)) -> dict:
+    return {
+        "id": user.get("sub"),
+        "email": user.get("email"),
+        "role": user.get("role"),
+    }
+
+
+@router.get("/auth/session")
+def auth_session(user: dict | None = Depends(optional_current_user)) -> dict:
+    if user is None:
+        return {"authenticated": False}
+    return {
+        "authenticated": True,
+        "id": user.get("sub"),
+        "email": user.get("email"),
+    }
+</file>
+
 <file path="backend/app/utils/__init__.py">
 # Empty file to make utils a Python package
+</file>
+
+<file path="backend/tests/integration/conftest.py">
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.domain.errors import AuthError
+
+FIXTURE_GRAPH_PATH = (
+    Path(__file__).resolve().parents[2] / "app" / "data" / "road_graph.json"
+)
+
+TEST_AUTH_HEADER = {"Authorization": "Bearer test-token"}
+
+
+@pytest.fixture(autouse=True)
+def mock_jwt(monkeypatch):
+    def fake_verify(token: str) -> dict:
+        if token == "test-token":
+            return {
+                "sub": "00000000-0000-0000-0000-000000000001",
+                "email": "test@example.com",
+                "role": "authenticated",
+            }
+        raise AuthError("Token không hợp lệ")
+
+    monkeypatch.setattr("app.auth.dependencies.verify_access_token", fake_verify)
+
+
+@pytest.fixture
+def client(monkeypatch):
+    monkeypatch.setenv("ROAD_FINDER_GRAPH_PATH", str(FIXTURE_GRAPH_PATH))
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    from app.main import create_app
+
+    with TestClient(create_app()) as test_client:
+        original_request = test_client.request
+
+        def authed_request(method, url, **kwargs):
+            headers = dict(kwargs.pop("headers", None) or {})
+            if "Authorization" not in headers:
+                headers.update(TEST_AUTH_HEADER)
+            kwargs["headers"] = headers
+            return original_request(method, url, **kwargs)
+
+        test_client.request = authed_request
+        yield test_client
+</file>
+
+<file path="backend/tests/unit/test_auth_api.py">
+import os
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.main import create_app
+
+
+@pytest.fixture
+def client(monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    return TestClient(create_app())
+
+
+def test_auth_session_unauthenticated(client):
+    response = client.get("/auth/session")
+    assert response.status_code == 200
+    assert response.json() == {"authenticated": False}
+
+
+def test_auth_me_requires_token(client):
+    response = client.get("/auth/me")
+    assert response.status_code == 401
 </file>
 
 <file path="backend/tests/unit/test_cost_model.py">
@@ -362,6 +548,88 @@ def test_routing_options_defaults():
     options = RoutingOptions()
     assert options.avoid_road_types == ()
     assert options.avoid_edge_ids == ()
+</file>
+
+<file path="backend/tests/unit/test_protected_routes.py">
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+FIXTURE_GRAPH_PATH = (
+    Path(__file__).resolve().parents[2] / "app" / "data" / "road_graph.json"
+)
+
+VALID_START = {"latitude": 10.7785, "longitude": 106.7149}
+VALID_END = {"latitude": 10.7808, "longitude": 106.7172}
+
+
+@pytest.fixture
+def client(monkeypatch):
+    monkeypatch.setenv("ROAD_FINDER_GRAPH_PATH", str(FIXTURE_GRAPH_PATH))
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    from app.main import create_app
+
+    with TestClient(create_app()) as test_client:
+        yield test_client
+
+
+@pytest.mark.parametrize(
+    "method,path,payload",
+    [
+        ("post", "/route", {"start": VALID_START, "end": VALID_END}),
+        (
+            "post",
+            "/assignments",
+            {
+                "order": {
+                    "id": "o1",
+                    "pickup": VALID_START,
+                    "dropoff": VALID_END,
+                },
+                "shippers": [
+                    {"id": "s1", "location": VALID_START},
+                ],
+            },
+        ),
+        (
+            "post",
+            "/tours",
+            {
+                "shipper": {"id": "s1", "location": VALID_START},
+                "orders": [
+                    {
+                        "id": "o1",
+                        "pickup": VALID_START,
+                        "dropoff": VALID_END,
+                    }
+                ],
+            },
+        ),
+        (
+            "post",
+            "/fleet",
+            {
+                "shippers": [{"id": "s1", "location": VALID_START}],
+                "orders": [
+                    {
+                        "id": "o1",
+                        "pickup": VALID_START,
+                        "dropoff": VALID_END,
+                    }
+                ],
+            },
+        ),
+    ],
+)
+def test_compute_endpoints_require_auth(client, method, path, payload):
+    response = getattr(client, method)(path, json=payload)
+    assert response.status_code == 401
+
+
+def test_health_and_bounds_remain_public(client):
+    assert client.get("/health").status_code == 200
+    assert client.get("/graph/bounds").status_code == 200
 </file>
 
 <file path="backend/tests/unit/test_review_fixes.py">
@@ -559,229 +827,295 @@ def test_pydantic_model_accepts_zero_threshold():
     assert req.tsp_brute_force_max_stops == 0
 </file>
 
-<file path="backend/tests/unit/test_vrp.py">
-from pathlib import Path
+<file path="frontend/src/api/authHeaders.js">
+import { isSupabaseConfigured, supabase } from "../lib/supabase";
 
-import pytest
+export async function getAuthHeaders() {
+  if (!isSupabaseConfigured || !supabase) {
+    return {};
+  }
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) {
+    return {};
+  }
+  return { Authorization: `Bearer ${token}` };
+}
+</file>
 
-from app.application.cost_matrix import CostMatrix
-from app.application.graph_runtime import build_graph_runtime
-from app.domain.cost_model import RoutingOptions
-from app.domain.tsp import Stop
-from app.domain.vrp import (
-    FleetPlan,
-    _find_cheapest_insertion_in_tour,
-    _inter_route_relocate,
-    _try_relocate_order,
-    solve_vrp,
-)
+<file path="frontend/src/components/AuthPanel.jsx">
+import { useState } from "react";
+import { useAuth } from "../hooks/useAuth";
 
-FIXTURE_GRAPH_PATH = (
-    Path(__file__).resolve().parents[2] / "app" / "data" / "road_graph.json"
-)
+export default function AuthPanel() {
+  const { configured, loading, user, signInWithGoogle, signOut } = useAuth();
+  const [error, setError] = useState(null);
 
+  if (!configured) {
+    return (
+      <div className="auth-panel auth-panel--disabled">
+        <span className="helper-text">Auth: chưa cấu hình Supabase env</span>
+      </div>
+    );
+  }
 
-@pytest.fixture
-def runtime():
-    return build_graph_runtime(FIXTURE_GRAPH_PATH)
+  if (loading) {
+    return (
+      <div className="auth-panel">
+        <span className="helper-text">Đang tải phiên…</span>
+      </div>
+    );
+  }
 
+  if (user) {
+    const label = user.user_metadata?.full_name || user.user_metadata?.name || user.email;
+    return (
+      <div className="auth-panel auth-panel--signed-in">
+        <span className="auth-user" title={user.email}>
+          {label}
+        </span>
+        <button className="secondary-button auth-button" type="button" onClick={() => signOut()}>
+          Đăng xuất
+        </button>
+      </div>
+    );
+  }
 
-@pytest.fixture
-def cost_matrix(runtime):
-    cm = CostMatrix(runtime)
-    cm.compute_for_nodes(list(runtime.nodes.keys()))
-    return cm
+  return (
+    <div className="auth-panel">
+      <button
+        className="primary-button auth-button"
+        type="button"
+        onClick={async () => {
+          setError(null);
+          try {
+            await signInWithGoogle();
+          } catch (err) {
+            setError(err?.message ?? "Không đăng nhập được.");
+          }
+        }}
+      >
+        Đăng nhập Google
+      </button>
+      {error ? <p className="error-text auth-error">{error}</p> : null}
+    </div>
+  );
+}
+</file>
 
+<file path="frontend/src/components/ScenarioPanel.jsx">
+import { useState } from "react";
+import PropTypes from "prop-types";
+import { useUserData } from "../hooks/useUserData";
 
-def test_vrp_single_shipper_single_order(cost_matrix):
-    result = solve_vrp(
-        shipper_ids=["s1"],
-        shipper_nodes={"s1": "node-start"},
-        orders=[("o1", "node-mid", "node-end")],
-        cost_matrix=cost_matrix,
-    )
+export default function ScenarioPanel({
+  user,
+  scenarioSnapshot,
+  onLoadScenario,
+  onAddPresetShipper,
+}) {
+  const {
+    scenarios,
+    presets,
+    loading,
+    error,
+    saveScenario,
+    deleteScenario,
+    savePreset,
+    deletePreset,
+  } = useUserData(user);
 
-    assert len(result.tours) == 1
-    assert result.tours[0][0] == "s1"
-    assert result.tours[0][1].total_distance_meters > 0
-    assert len(result.tours[0][1].ordered_stops) == 2
-    assert result.unassigned_order_ids == []
+  const [scenarioName, setScenarioName] = useState("");
+  const [presetName, setPresetName] = useState("");
+  const [actionError, setActionError] = useState(null);
+  const [busy, setBusy] = useState(false);
 
+  if (!user) {
+    return (
+      <div className="panel-card auth-gate-card">
+        <h2>Đăng nhập để dùng VRP</h2>
+        <p className="helper-text">
+          Tính năng tối ưu quãng đường yêu cầu đăng nhập Google. Bấm &quot;Đăng nhập Google&quot; ở góc trên.
+        </p>
+      </div>
+    );
+  }
 
-def test_vrp_precedence_respected(cost_matrix):
-    result = solve_vrp(
-        shipper_ids=["s1"],
-        shipper_nodes={"s1": "node-start"},
-        orders=[
-            ("o1", "node-mid", "node-end"),
-            ("o2", "node-north", "node-south"),
-        ],
-        cost_matrix=cost_matrix,
-    )
-
-    # Check precedence in each tour
-    for sid, tour in result.tours:
-        seen = {}
-        for stop in tour.ordered_stops:
-            if stop.order_id not in seen:
-                seen[stop.order_id] = []
-            seen[stop.order_id].append(stop.kind)
-
-        for order_id, kinds in seen.items():
-            pickup_idx = kinds.index("pickup")
-            dropoff_idx = kinds.index("dropoff")
-            assert pickup_idx < dropoff_idx
-
-
-def test_vrp_two_shippers_two_orders(cost_matrix):
-    result = solve_vrp(
-        shipper_ids=["s1", "s2"],
-        shipper_nodes={"s1": "node-start", "s2": "node-north"},
-        orders=[
-            ("o1", "node-mid", "node-end"),
-            ("o2", "node-start", "node-north"),
-        ],
-        cost_matrix=cost_matrix,
-    )
-
-    assert len(result.tours) == 2
-    assert result.total_distance_meters > 0
-    # Both orders should be assigned
-    all_order_ids = set()
-    for sid, tour in result.tours:
-        for stop in tour.ordered_stops:
-            all_order_ids.add(stop.order_id)
-    assert "o1" in all_order_ids
-    assert "o2" in all_order_ids
-
-
-def test_vrp_empty_orders(cost_matrix):
-    result = solve_vrp(
-        shipper_ids=["s1"],
-        shipper_nodes={"s1": "node-start"},
-        orders=[],
-        cost_matrix=cost_matrix,
-    )
-
-    assert result.total_distance_meters == pytest.approx(0.0)
-    assert result.optimal is True
-
-
-def test_vrp_small_instance_brute_force(cost_matrix):
-    """Small instance should use brute-force and be optimal."""
-    result = solve_vrp(
-        shipper_ids=["s1", "s2"],
-        shipper_nodes={"s1": "node-start", "s2": "node-north"},
-        orders=[
-            ("o1", "node-mid", "node-end"),
-        ],
-        cost_matrix=cost_matrix,
-        brute_force_threshold=4,
-    )
-
-    # Should be optimal since we used brute-force
-    assert result.optimal is True
-    assert result.total_distance_meters > 0
-
-
-def test_cheapest_insertion_into_nonempty_destination_tour(cost_matrix):
-    dst_stops = [
-        Stop(order_id="o3", kind="pickup", node_id="node-start"),
-        Stop(order_id="o3", kind="dropoff", node_id="node-mid"),
-    ]
-    pickup = Stop(order_id="o2", kind="pickup", node_id="node-north")
-    dropoff = Stop(order_id="o2", kind="dropoff", node_id="node-south")
-
-    inserted = _find_cheapest_insertion_in_tour(
-        dst_stops,
-        pickup,
-        dropoff,
-        "node-north",
-        cost_matrix,
-    )
-
-    assert inserted is not None
-    order_ids = {stop.order_id for stop in inserted}
-    assert order_ids == {"o2", "o3"}
-
-
-def test_try_relocate_order_preserves_destination_orders(cost_matrix):
-    src_stops = [
-        Stop(order_id="o1", kind="pickup", node_id="node-mid"),
-        Stop(order_id="o1", kind="dropoff", node_id="node-end"),
-        Stop(order_id="o2", kind="pickup", node_id="node-north"),
-        Stop(order_id="o2", kind="dropoff", node_id="node-south"),
-    ]
-    dst_stops = [
-        Stop(order_id="o3", kind="pickup", node_id="node-start"),
-        Stop(order_id="o3", kind="dropoff", node_id="node-mid"),
-    ]
-    shipper_nodes = {"s1": "node-start", "s2": "node-north"}
-
-    result = _try_relocate_order(
-        "s1",
-        "s2",
-        "o2",
-        src_stops,
-        pickup_idx=2,
-        dropoff_idx=3,
-        dst_stops=dst_stops,
-        shipper_nodes=shipper_nodes,
-        cost_matrix=cost_matrix,
-    )
-
-    assert result is not None
-    new_src, new_dst, _ = result
-    assert {stop.order_id for stop in new_src} == {"o1"}
-    assert {stop.order_id for stop in new_dst} == {"o2", "o3"}
-
-
-def test_inter_route_relocate_keeps_all_assigned_orders(cost_matrix):
-    tours = {
-        "s1": [
-            Stop(order_id="o1", kind="pickup", node_id="node-mid"),
-            Stop(order_id="o1", kind="dropoff", node_id="node-end"),
-            Stop(order_id="o2", kind="pickup", node_id="node-north"),
-            Stop(order_id="o2", kind="dropoff", node_id="node-south"),
-        ],
-        "s2": [
-            Stop(order_id="o3", kind="pickup", node_id="node-start"),
-            Stop(order_id="o3", kind="dropoff", node_id="node-mid"),
-        ],
+  const handleSaveScenario = async () => {
+    setActionError(null);
+    setBusy(true);
+    try {
+      await saveScenario(scenarioName, scenarioSnapshot());
+      setScenarioName("");
+    } catch (err) {
+      setActionError(err?.message ?? "Không lưu được kịch bản.");
+    } finally {
+      setBusy(false);
     }
-    shipper_nodes = {"s1": "node-start", "s2": "node-north"}
+  };
 
-    relocated = _inter_route_relocate(tours, shipper_nodes, cost_matrix)
-
-    served = {
-        stop.order_id
-        for stops in relocated.values()
-        for stop in stops
+  const handleSavePreset = async () => {
+    const shipper = scenarioSnapshot().shippers?.[0];
+    if (!shipper) {
+      setActionError("Thêm ít nhất một shipper trước khi lưu preset.");
+      return;
     }
-    assert served == {"o1", "o2", "o3"}
-
-
-def test_heuristic_vrp_serves_all_orders_with_multiple_shippers(cost_matrix):
-    options = RoutingOptions(vrp_brute_force_max_orders=0, vrp_brute_force_max_shippers=0)
-    result = solve_vrp(
-        shipper_ids=["s1", "s2"],
-        shipper_nodes={"s1": "node-start", "s2": "node-north"},
-        orders=[
-            ("o1", "node-mid", "node-end"),
-            ("o2", "node-north", "node-south"),
-            ("o3", "node-start", "node-mid"),
-        ],
-        cost_matrix=cost_matrix,
-        options=options,
-    )
-
-    served = {
-        stop.order_id
-        for _, tour in result.tours
-        for stop in tour.ordered_stops
+    setActionError(null);
+    setBusy(true);
+    try {
+      await savePreset({
+        name: presetName,
+        latitude: shipper.location.latitude,
+        longitude: shipper.location.longitude,
+      });
+      setPresetName("");
+    } catch (err) {
+      setActionError(err?.message ?? "Không lưu được preset.");
+    } finally {
+      setBusy(false);
     }
-    assert served == {"o1", "o2", "o3"}
-    assert result.unassigned_order_ids == []
+  };
+
+  return (
+    <div className="panel-card scenario-panel">
+      <h2>Kịch bản & preset</h2>
+      <p className="helper-text">Lưu/tải đơn, shipper và lựa chọn hiện tại.</p>
+
+      <div className="scenario-form">
+        <input
+          type="text"
+          placeholder="Tên kịch bản mới"
+          value={scenarioName}
+          onChange={(event) => setScenarioName(event.target.value)}
+          disabled={busy}
+        />
+        <button
+          className="secondary-button"
+          type="button"
+          onClick={handleSaveScenario}
+          disabled={busy || !scenarioName.trim()}
+        >
+          Lưu kịch bản
+        </button>
+      </div>
+
+      <div className="scenario-form">
+        <input
+          type="text"
+          placeholder="Tên shipper preset (shipper đầu tiên)"
+          value={presetName}
+          onChange={(event) => setPresetName(event.target.value)}
+          disabled={busy}
+        />
+        <button
+          className="secondary-button"
+          type="button"
+          onClick={handleSavePreset}
+          disabled={busy || !presetName.trim()}
+        >
+          Lưu preset
+        </button>
+      </div>
+
+      {(error || actionError) && (
+        <p className="error-text">{actionError ?? error}</p>
+      )}
+
+      {loading ? (
+        <p className="helper-text">Đang tải dữ liệu…</p>
+      ) : (
+        <>
+          <h3>Kịch bản đã lưu</h3>
+          {scenarios.length === 0 ? (
+            <p className="empty-text">Chưa có kịch bản nào.</p>
+          ) : (
+            <ul className="scenario-list">
+              {scenarios.map((item) => (
+                <li key={item.id} className="scenario-list-item">
+                  <button
+                    className="link-button"
+                    type="button"
+                    onClick={() => onLoadScenario(item.payload)}
+                  >
+                    {item.name}
+                  </button>
+                  <button
+                    className="icon-button"
+                    type="button"
+                    aria-label={`Xóa ${item.name}`}
+                    onClick={async () => {
+                      setBusy(true);
+                      try {
+                        await deleteScenario(item.id);
+                      } catch (err) {
+                        setActionError(err?.message ?? "Không xóa được.");
+                      } finally {
+                        setBusy(false);
+                      }
+                    }}
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <h3>Shipper preset</h3>
+          {presets.length === 0 ? (
+            <p className="empty-text">Chưa có preset nào.</p>
+          ) : (
+            <ul className="scenario-list">
+              {presets.map((item) => (
+                <li key={item.id} className="scenario-list-item">
+                  <button
+                    className="link-button"
+                    type="button"
+                    onClick={() =>
+                      onAddPresetShipper({
+                        latitude: item.latitude,
+                        longitude: item.longitude,
+                      })
+                    }
+                  >
+                    {item.name}
+                  </button>
+                  <button
+                    className="icon-button"
+                    type="button"
+                    aria-label={`Xóa ${item.name}`}
+                    onClick={async () => {
+                      setBusy(true);
+                      try {
+                        await deletePreset(item.id);
+                      } catch (err) {
+                        setActionError(err?.message ?? "Không xóa được.");
+                      } finally {
+                        setBusy(false);
+                      }
+                    }}
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+ScenarioPanel.propTypes = {
+  user: PropTypes.shape({
+    id: PropTypes.string,
+    email: PropTypes.string,
+  }),
+  scenarioSnapshot: PropTypes.func.isRequired,
+  onLoadScenario: PropTypes.func.isRequired,
+  onAddPresetShipper: PropTypes.func.isRequired,
+};
 </file>
 
 <file path="frontend/src/components/ShipperAssignmentPanel.jsx">
@@ -1002,6 +1336,231 @@ TourResultPanel.propTypes = {
 };
 </file>
 
+<file path="frontend/src/hooks/useAuth.js">
+import { useCallback, useEffect, useState } from "react";
+import { isSupabaseConfigured, supabase } from "../lib/supabase";
+
+export function useAuth() {
+  const [session, setSession] = useState(null);
+  const [loading, setLoading] = useState(isSupabaseConfigured);
+
+  useEffect(() => {
+    if (!supabase) {
+      setLoading(false);
+      return undefined;
+    }
+
+    let mounted = true;
+
+    supabase.auth.getSession().then(({ data }) => {
+      if (mounted) {
+        setSession(data.session ?? null);
+        setLoading(false);
+      }
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+      setLoading(false);
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  const signInWithGoogle = useCallback(async () => {
+    if (!supabase) {
+      throw new Error("Supabase chưa được cấu hình (thiếu VITE_SUPABASE_URL/ANON_KEY).");
+    }
+    const redirectTo = `${window.location.origin}/auth/callback`;
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: { redirectTo },
+    });
+    if (error) throw error;
+  }, []);
+
+  const signOut = useCallback(async () => {
+    if (!supabase) return;
+    const { error } = await supabase.auth.signOut();
+    if (error) throw error;
+  }, []);
+
+  const user = session?.user ?? null;
+  const accessToken = session?.access_token ?? null;
+
+  return {
+    configured: isSupabaseConfigured,
+    loading,
+    user,
+    accessToken,
+    signInWithGoogle,
+    signOut,
+  };
+}
+</file>
+
+<file path="frontend/src/hooks/useUserData.js">
+import { useCallback, useEffect, useState } from "react";
+import { supabase } from "../lib/supabase";
+
+export function useUserData(user) {
+  const [scenarios, setScenarios] = useState([]);
+  const [presets, setPresets] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const refresh = useCallback(async () => {
+    if (!user || !supabase) {
+      setScenarios([]);
+      setPresets([]);
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    try {
+      const [scenarioResult, presetResult] = await Promise.all([
+        supabase
+          .from("saved_scenarios")
+          .select("id, name, payload, updated_at")
+          .order("updated_at", { ascending: false }),
+        supabase
+          .from("shipper_presets")
+          .select("id, name, latitude, longitude, created_at")
+          .order("created_at", { ascending: false }),
+      ]);
+
+      if (scenarioResult.error) throw scenarioResult.error;
+      if (presetResult.error) throw presetResult.error;
+
+      setScenarios(scenarioResult.data ?? []);
+      setPresets(presetResult.data ?? []);
+    } catch (err) {
+      setError(err?.message ?? "Không tải được dữ liệu người dùng.");
+    } finally {
+      setLoading(false);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const saveScenario = useCallback(
+    async (name, payload) => {
+      if (!user || !supabase) {
+        throw new Error("Cần đăng nhập để lưu kịch bản.");
+      }
+      const trimmed = name.trim();
+      if (!trimmed) {
+        throw new Error("Tên kịch bản không được để trống.");
+      }
+
+      const { data, error: insertError } = await supabase
+        .from("saved_scenarios")
+        .insert({ name: trimmed, payload, user_id: user.id })
+        .select("id, name, payload, updated_at")
+        .single();
+
+      if (insertError) throw insertError;
+      setScenarios((prev) => [data, ...prev]);
+      return data;
+    },
+    [user]
+  );
+
+  const deleteScenario = useCallback(
+    async (scenarioId) => {
+      if (!user || !supabase) return;
+      const { error: deleteError } = await supabase
+        .from("saved_scenarios")
+        .delete()
+        .eq("id", scenarioId);
+      if (deleteError) throw deleteError;
+      setScenarios((prev) => prev.filter((item) => item.id !== scenarioId));
+    },
+    [user]
+  );
+
+  const savePreset = useCallback(
+    async ({ name, latitude, longitude }) => {
+      if (!user || !supabase) {
+        throw new Error("Cần đăng nhập để lưu shipper preset.");
+      }
+      const trimmed = name.trim();
+      if (!trimmed) {
+        throw new Error("Tên preset không được để trống.");
+      }
+
+      const { data, error: insertError } = await supabase
+        .from("shipper_presets")
+        .insert({
+          name: trimmed,
+          latitude,
+          longitude,
+          user_id: user.id,
+        })
+        .select("id, name, latitude, longitude, created_at")
+        .single();
+
+      if (insertError) throw insertError;
+      setPresets((prev) => [data, ...prev]);
+      return data;
+    },
+    [user]
+  );
+
+  const deletePreset = useCallback(
+    async (presetId) => {
+      if (!user || !supabase) return;
+      const { error: deleteError } = await supabase
+        .from("shipper_presets")
+        .delete()
+        .eq("id", presetId);
+      if (deleteError) throw deleteError;
+      setPresets((prev) => prev.filter((item) => item.id !== presetId));
+    },
+    [user]
+  );
+
+  return {
+    scenarios,
+    presets,
+    loading,
+    error,
+    refresh,
+    saveScenario,
+    deleteScenario,
+    savePreset,
+    deletePreset,
+  };
+}
+</file>
+
+<file path="frontend/src/lib/supabase.js">
+import { createClient } from "@supabase/supabase-js";
+
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL ?? "";
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY ?? "";
+
+export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
+
+export const supabase = isSupabaseConfigured
+  ? createClient(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true,
+      },
+    })
+  : null;
+</file>
+
 <file path="frontend/src/utils/format.js">
 export function formatDistance(meters) {
   if (typeof meters !== "number" || !Number.isFinite(meters) || meters < 0) {
@@ -1081,25 +1640,6 @@ export function getShipperShortLabel(shipperId) {
 }
 </file>
 
-<file path="frontend/src/main.jsx">
-import React from "react";
-import ReactDOM from "react-dom/client";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import "leaflet/dist/leaflet.css";
-import "./App.css";
-import App from "./App";
-
-const queryClient = new QueryClient();
-
-ReactDOM.createRoot(document.getElementById("root")).render(
-  <React.StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <App />
-    </QueryClientProvider>
-  </React.StrictMode>
-);
-</file>
-
 <file path="frontend/index.html">
 <!doctype html>
 <html lang="vi">
@@ -1142,35 +1682,35 @@ droid-wiki
 .agents
 </file>
 
-<file path="vercel.json">
-{
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "cd frontend && npm install && VITE_API_BASE_URL= npm run build",
-  "outputDirectory": "frontend/dist",
-  "installCommand": "cd frontend && npm install",
-  "framework": null,
-  "rewrites": [
-    { "source": "/health", "destination": "/api" },
-    { "source": "/graph/:path*", "destination": "/api" },
-    { "source": "/route", "destination": "/api" },
-    { "source": "/assignments", "destination": "/api" },
-    { "source": "/tours", "destination": "/api" },
-    { "source": "/fleet", "destination": "/api" },
-    { "source": "/(.*)", "destination": "/index.html" }
-  ],
-  "functions": {
-    "api/*.py": {
-      "memory": 1024,
-      "maxDuration": 60,
-      "includeFiles": "backend/app/**"
-    }
-  }
-}
-</file>
+<file path="api/index.py">
+"""Vercel serverless entry for the FastAPI backend."""
 
-<file path="api/requirements.txt">
-fastapi>=0.110
-pydantic>=2
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+BACKEND_ROOT = ROOT / "backend"
+GRAPH_PATH = BACKEND_ROOT / "app" / "data" / "road_graph.hcm-v2-uw.json"
+
+sys.path.insert(0, str(BACKEND_ROOT))
+os.environ.setdefault("ROAD_FINDER_GRAPH_PATH", str(GRAPH_PATH))
+
+from app.application.graph_runtime import build_graph_runtime
+from app.main import create_app
+
+app = create_app()
+
+_graph_path = Path(os.environ["ROAD_FINDER_GRAPH_PATH"])
+if not _graph_path.is_file():
+    raise FileNotFoundError(
+        f"Road graph not found at {_graph_path}. "
+        "Ensure backend/app/data/road_graph.hcm-v2-uw.json is deployed."
+    )
+
+app.state.graph_runtime = build_graph_runtime(_graph_path)
 </file>
 
 <file path="backend/app/application/snap_service.py">
@@ -1294,25 +1834,6 @@ def edge_cost(distance: float, road_type: str, options: RoutingOptions) -> float
         return float("inf")
     multiplier = DEFAULT_ROAD_MULTIPLIERS.get(road_type, 1.0)
     return distance * multiplier
-</file>
-
-<file path="backend/app/domain/errors.py">
-ACCEPTED_AREA_DETAIL = "Error: Not in accepted area"
-NO_ROUTE_DETAIL = "No route found between selected points"
-
-
-class AcceptedAreaError(Exception):
-    """Point is outside accepted bbox or beyond max snap distance."""
-
-    def __init__(self, message: str = ACCEPTED_AREA_DETAIL) -> None:
-        super().__init__(message)
-
-
-class NoRouteError(Exception):
-    """Snapped start and end lie in disconnected graph components."""
-
-    def __init__(self, message: str = NO_ROUTE_DETAIL) -> None:
-        super().__init__(message)
 </file>
 
 <file path="backend/app/domain/graph_types.py">
@@ -1519,60 +2040,6 @@ def build_assignment_leg(
         distance_meters=distance,
         route_points=route_points,
     )
-</file>
-
-<file path="backend/tests/integration/test_no_external_runtime.py">
-"""VAL-BE-015 / VAL-DOM-022: MVP route endpoints must not call external HTTP providers."""
-
-from pathlib import Path
-
-import pytest
-import requests
-from fastapi.testclient import TestClient
-
-FIXTURE_GRAPH_PATH = (
-    Path(__file__).resolve().parents[2] / "app" / "data" / "road_graph.json"
-)
-
-VALID_START = {"latitude": 10.7785, "longitude": 106.7149}
-VALID_END = {"latitude": 10.7808, "longitude": 106.7172}
-
-
-class ExternalHttpBlocked(RuntimeError):
-    """Raised when runtime code attempts Overpass/OSRM or other external HTTP."""
-
-
-def _block_external_http(*_args, **_kwargs):
-    raise ExternalHttpBlocked("external HTTP is blocked for MVP runtime tests")
-
-
-@pytest.fixture
-def client(monkeypatch):
-    monkeypatch.setenv("ROAD_FINDER_GRAPH_PATH", str(FIXTURE_GRAPH_PATH))
-    monkeypatch.setattr(requests, "get", _block_external_http)
-    monkeypatch.setattr(requests, "post", _block_external_http)
-    from app.main import create_app
-
-    with TestClient(create_app()) as c:
-        yield c
-
-
-def test_health_graph_bounds_and_routes_without_external_http(client):
-    health = client.get("/health")
-    assert health.status_code == 200
-    assert health.json()["graph"]["loaded"] is True
-
-    bounds = client.get("/graph/bounds")
-    assert bounds.status_code == 200
-    assert bounds.json()["max_snap_distance_meters"] == 200
-
-    route = client.post(
-        "/route",
-        json={"start": VALID_START, "end": VALID_END},
-    )
-    assert route.status_code == 200
-    assert route.json()["distance"] > 0
-    assert len(route.json()["route_points"]) >= 2
 </file>
 
 <file path="backend/tests/unit/test_api_errors.py">
@@ -2198,6 +2665,231 @@ def test_health_endpoint_returns_cache_metadata(monkeypatch):
         assert body["graph"]["loaded"] is True
 </file>
 
+<file path="backend/tests/unit/test_vrp.py">
+from pathlib import Path
+
+import pytest
+
+from app.application.cost_matrix import CostMatrix
+from app.application.graph_runtime import build_graph_runtime
+from app.domain.cost_model import RoutingOptions
+from app.domain.tsp import Stop
+from app.domain.vrp import (
+    FleetPlan,
+    _find_cheapest_insertion_in_tour,
+    _inter_route_relocate,
+    _try_relocate_order,
+    solve_vrp,
+)
+
+FIXTURE_GRAPH_PATH = (
+    Path(__file__).resolve().parents[2] / "app" / "data" / "road_graph.json"
+)
+
+
+@pytest.fixture
+def runtime():
+    return build_graph_runtime(FIXTURE_GRAPH_PATH)
+
+
+@pytest.fixture
+def cost_matrix(runtime):
+    cm = CostMatrix(runtime)
+    cm.compute_for_nodes(list(runtime.nodes.keys()))
+    return cm
+
+
+def test_vrp_single_shipper_single_order(cost_matrix):
+    result = solve_vrp(
+        shipper_ids=["s1"],
+        shipper_nodes={"s1": "node-start"},
+        orders=[("o1", "node-mid", "node-end")],
+        cost_matrix=cost_matrix,
+    )
+
+    assert len(result.tours) == 1
+    assert result.tours[0][0] == "s1"
+    assert result.tours[0][1].total_distance_meters > 0
+    assert len(result.tours[0][1].ordered_stops) == 2
+    assert result.unassigned_order_ids == []
+
+
+def test_vrp_precedence_respected(cost_matrix):
+    result = solve_vrp(
+        shipper_ids=["s1"],
+        shipper_nodes={"s1": "node-start"},
+        orders=[
+            ("o1", "node-mid", "node-end"),
+            ("o2", "node-north", "node-south"),
+        ],
+        cost_matrix=cost_matrix,
+    )
+
+    # Check precedence in each tour
+    for sid, tour in result.tours:
+        seen = {}
+        for stop in tour.ordered_stops:
+            if stop.order_id not in seen:
+                seen[stop.order_id] = []
+            seen[stop.order_id].append(stop.kind)
+
+        for order_id, kinds in seen.items():
+            pickup_idx = kinds.index("pickup")
+            dropoff_idx = kinds.index("dropoff")
+            assert pickup_idx < dropoff_idx
+
+
+def test_vrp_two_shippers_two_orders(cost_matrix):
+    result = solve_vrp(
+        shipper_ids=["s1", "s2"],
+        shipper_nodes={"s1": "node-start", "s2": "node-north"},
+        orders=[
+            ("o1", "node-mid", "node-end"),
+            ("o2", "node-start", "node-north"),
+        ],
+        cost_matrix=cost_matrix,
+    )
+
+    assert len(result.tours) == 2
+    assert result.total_distance_meters > 0
+    # Both orders should be assigned
+    all_order_ids = set()
+    for sid, tour in result.tours:
+        for stop in tour.ordered_stops:
+            all_order_ids.add(stop.order_id)
+    assert "o1" in all_order_ids
+    assert "o2" in all_order_ids
+
+
+def test_vrp_empty_orders(cost_matrix):
+    result = solve_vrp(
+        shipper_ids=["s1"],
+        shipper_nodes={"s1": "node-start"},
+        orders=[],
+        cost_matrix=cost_matrix,
+    )
+
+    assert result.total_distance_meters == pytest.approx(0.0)
+    assert result.optimal is True
+
+
+def test_vrp_small_instance_brute_force(cost_matrix):
+    """Small instance should use brute-force and be optimal."""
+    result = solve_vrp(
+        shipper_ids=["s1", "s2"],
+        shipper_nodes={"s1": "node-start", "s2": "node-north"},
+        orders=[
+            ("o1", "node-mid", "node-end"),
+        ],
+        cost_matrix=cost_matrix,
+        brute_force_threshold=4,
+    )
+
+    # Should be optimal since we used brute-force
+    assert result.optimal is True
+    assert result.total_distance_meters > 0
+
+
+def test_cheapest_insertion_into_nonempty_destination_tour(cost_matrix):
+    dst_stops = [
+        Stop(order_id="o3", kind="pickup", node_id="node-start"),
+        Stop(order_id="o3", kind="dropoff", node_id="node-mid"),
+    ]
+    pickup = Stop(order_id="o2", kind="pickup", node_id="node-north")
+    dropoff = Stop(order_id="o2", kind="dropoff", node_id="node-south")
+
+    inserted = _find_cheapest_insertion_in_tour(
+        dst_stops,
+        pickup,
+        dropoff,
+        "node-north",
+        cost_matrix,
+    )
+
+    assert inserted is not None
+    order_ids = {stop.order_id for stop in inserted}
+    assert order_ids == {"o2", "o3"}
+
+
+def test_try_relocate_order_preserves_destination_orders(cost_matrix):
+    src_stops = [
+        Stop(order_id="o1", kind="pickup", node_id="node-mid"),
+        Stop(order_id="o1", kind="dropoff", node_id="node-end"),
+        Stop(order_id="o2", kind="pickup", node_id="node-north"),
+        Stop(order_id="o2", kind="dropoff", node_id="node-south"),
+    ]
+    dst_stops = [
+        Stop(order_id="o3", kind="pickup", node_id="node-start"),
+        Stop(order_id="o3", kind="dropoff", node_id="node-mid"),
+    ]
+    shipper_nodes = {"s1": "node-start", "s2": "node-north"}
+
+    result = _try_relocate_order(
+        "s1",
+        "s2",
+        "o2",
+        src_stops,
+        pickup_idx=2,
+        dropoff_idx=3,
+        dst_stops=dst_stops,
+        shipper_nodes=shipper_nodes,
+        cost_matrix=cost_matrix,
+    )
+
+    assert result is not None
+    new_src, new_dst, _ = result
+    assert {stop.order_id for stop in new_src} == {"o1"}
+    assert {stop.order_id for stop in new_dst} == {"o2", "o3"}
+
+
+def test_inter_route_relocate_keeps_all_assigned_orders(cost_matrix):
+    tours = {
+        "s1": [
+            Stop(order_id="o1", kind="pickup", node_id="node-mid"),
+            Stop(order_id="o1", kind="dropoff", node_id="node-end"),
+            Stop(order_id="o2", kind="pickup", node_id="node-north"),
+            Stop(order_id="o2", kind="dropoff", node_id="node-south"),
+        ],
+        "s2": [
+            Stop(order_id="o3", kind="pickup", node_id="node-start"),
+            Stop(order_id="o3", kind="dropoff", node_id="node-mid"),
+        ],
+    }
+    shipper_nodes = {"s1": "node-start", "s2": "node-north"}
+
+    relocated = _inter_route_relocate(tours, shipper_nodes, cost_matrix)
+
+    served = {
+        stop.order_id
+        for stops in relocated.values()
+        for stop in stops
+    }
+    assert served == {"o1", "o2", "o3"}
+
+
+def test_heuristic_vrp_serves_all_orders_with_multiple_shippers(cost_matrix):
+    options = RoutingOptions(vrp_brute_force_max_orders=0, vrp_brute_force_max_shippers=0)
+    result = solve_vrp(
+        shipper_ids=["s1", "s2"],
+        shipper_nodes={"s1": "node-start", "s2": "node-north"},
+        orders=[
+            ("o1", "node-mid", "node-end"),
+            ("o2", "node-north", "node-south"),
+            ("o3", "node-start", "node-mid"),
+        ],
+        cost_matrix=cost_matrix,
+        options=options,
+    )
+
+    served = {
+        stop.order_id
+        for _, tour in result.tours
+        for stop in tour.ordered_stops
+    }
+    assert served == {"o1", "o2", "o3"}
+    assert result.unassigned_order_ids == []
+</file>
+
 <file path="frontend/src/components/OptionsPanel.jsx">
 import React from "react";
 import PropTypes from "prop-types";
@@ -2301,193 +2993,67 @@ export const FleetResultPropType = PropTypes.shape({
 export const ShipperColorMapPropType = PropTypes.objectOf(PropTypes.string);
 </file>
 
-<file path="frontend/src/hooks/useVrpState.js">
-import { useCallback, useState } from "react";
+<file path="frontend/src/pages/AuthCallback.jsx">
+import { useEffect, useState } from "react";
+import { supabase } from "../lib/supabase";
 
-export const PLACEMENT_MODE = {
-  ORDER: "order",
-  SHIPPER: "shipper",
-};
+export default function AuthCallback() {
+  const [message, setMessage] = useState("Đang xử lý đăng nhập…");
 
-export const ORDER_STEP = {
-  SET_PICKUP: "set_pickup",
-  SET_DROPOFF: "set_dropoff",
-};
+  useEffect(() => {
+    if (!supabase) {
+      setMessage("Supabase chưa được cấu hình.");
+      return undefined;
+    }
 
-export const VRP_STATUS = {
-  IDLE: "idle",
-  LOADING: "loading",
-  SUCCESS: "success",
-  ERROR: "error",
-};
+    let mounted = true;
 
-export const SHIPPER_COLORS = [
-  "#2563eb",
-  "#dc2626",
-  "#16a34a",
-  "#9333ea",
-  "#ea580c",
-  "#0891b2",
-  "#ca8a04",
-  "#e11d48",
-];
+    async function finishAuth() {
+      const params = new URLSearchParams(globalThis.location.search);
+      const code = params.get("code");
+      const authError = params.get("error_description") ?? params.get("error");
 
-export function getShipperColor(index) {
-  return SHIPPER_COLORS[index % SHIPPER_COLORS.length];
-}
+      if (authError) {
+        if (mounted) setMessage(authError);
+        return;
+      }
 
-let _nextShipperId = 1;
-let _nextOrderId = 1;
+      if (code) {
+        const { error } = await supabase.auth.exchangeCodeForSession(code);
+        if (!mounted) return;
+        if (error) {
+          setMessage(error.message);
+          return;
+        }
+        globalThis.location.replace("/");
+        return;
+      }
 
-function clearTourOnEdit(setTourResult, setStatus, setErrorMessage) {
-  setTourResult(null);
-  setStatus(VRP_STATUS.IDLE);
-  setErrorMessage("");
-}
+      const { data, error } = await supabase.auth.getSession();
+      if (!mounted) return;
+      if (error) {
+        setMessage(error.message);
+        return;
+      }
+      if (data.session) {
+        globalThis.location.replace("/");
+        return;
+      }
 
-export function useVrpState() {
-  const [placementMode, setPlacementMode] = useState(PLACEMENT_MODE.ORDER);
-  const [pendingPickup, setPendingPickup] = useState(null);
-  const [orders, setOrders] = useState([]);
-  const [shippers, setShippers] = useState([]);
-  const [selectedShipperId, setSelectedShipperId] = useState(null);
-  const [selectedOrderIds, setSelectedOrderIds] = useState([]);
-  const [tourResult, setTourResult] = useState(null);
-  const [status, setStatus] = useState(VRP_STATUS.IDLE);
-  const [errorMessage, setErrorMessage] = useState("");
-  const [avoidRoadTypes, setAvoidRoadTypes] = useState([]);
+      setMessage("Không lấy được phiên đăng nhập. Thử đăng nhập lại.");
+    }
 
-  const resetTour = useCallback(() => {
-    clearTourOnEdit(setTourResult, setStatus, setErrorMessage);
-  }, []);
-
-  const setPickupForNewOrder = useCallback((point) => {
-    setPendingPickup(point);
-    setErrorMessage("");
-  }, []);
-
-  const setDropoffForPendingOrder = useCallback((point) => {
-    if (!pendingPickup) return;
-    const orderId = `o${_nextOrderId++}`;
-    setOrders((prev) => [
-      ...prev,
-      { id: orderId, pickup: pendingPickup, dropoff: point },
-    ]);
-    setPendingPickup(null);
-    resetTour();
-  }, [pendingPickup, resetTour]);
-
-  const cancelPendingPickup = useCallback(() => {
-    setPendingPickup(null);
-    setErrorMessage("");
-  }, []);
-
-  const addShipper = useCallback((point) => {
-    const newShipper = {
-      id: `s${_nextShipperId++}`,
-      location: point,
+    finishAuth();
+    return () => {
+      mounted = false;
     };
-    setShippers((prev) => [...prev, newShipper]);
-    setSelectedShipperId((current) => current ?? newShipper.id);
-    resetTour();
-  }, [resetTour]);
-
-  const removeOrder = useCallback((orderId) => {
-    setOrders((prev) => prev.filter((o) => o.id !== orderId));
-    setSelectedOrderIds((prev) => prev.filter((id) => id !== orderId));
-    resetTour();
-  }, [resetTour]);
-
-  const removeShipper = useCallback((shipperId) => {
-    setShippers((prev) => {
-      const next = prev.filter((s) => s.id !== shipperId);
-      setSelectedShipperId((current) => {
-        if (current !== shipperId) return current;
-        return next[0]?.id ?? null;
-      });
-      return next;
-    });
-    resetTour();
-  }, [resetTour]);
-
-  const clearAll = useCallback(() => {
-    setOrders([]);
-    setShippers([]);
-    setPendingPickup(null);
-    setSelectedShipperId(null);
-    setSelectedOrderIds([]);
-    setTourResult(null);
-    setStatus(VRP_STATUS.IDLE);
-    setErrorMessage("");
   }, []);
 
-  const selectShipper = useCallback((shipperId) => {
-    setSelectedShipperId(shipperId);
-    resetTour();
-  }, [resetTour]);
-
-  const toggleOrderSelection = useCallback((orderId) => {
-    setSelectedOrderIds((prev) =>
-      prev.includes(orderId)
-        ? prev.filter((id) => id !== orderId)
-        : [...prev, orderId]
-    );
-    resetTour();
-  }, [resetTour]);
-
-  const beginRequest = useCallback(() => {
-    setStatus(VRP_STATUS.LOADING);
-    setErrorMessage("");
-  }, []);
-
-  const completeRequest = useCallback((data) => {
-    setTourResult(data);
-    setStatus(VRP_STATUS.SUCCESS);
-    setErrorMessage("");
-  }, []);
-
-  const failRequest = useCallback((message) => {
-    setStatus(VRP_STATUS.ERROR);
-    setErrorMessage(message || "Có lỗi xảy ra.");
-  }, []);
-
-  const canOptimize =
-    Boolean(selectedShipperId) &&
-    selectedOrderIds.length > 0 &&
-    status !== VRP_STATUS.LOADING;
-
-  const orderStep = pendingPickup
-    ? ORDER_STEP.SET_DROPOFF
-    : ORDER_STEP.SET_PICKUP;
-
-  return {
-    placementMode,
-    setPlacementMode,
-    orderStep,
-    pendingPickup,
-    orders,
-    shippers,
-    selectedShipperId,
-    selectedOrderIds,
-    tourResult,
-    status,
-    errorMessage,
-    avoidRoadTypes,
-    setAvoidRoadTypes,
-    canOptimize,
-    setPickupForNewOrder,
-    setDropoffForPendingOrder,
-    cancelPendingPickup,
-    addShipper,
-    removeOrder,
-    removeShipper,
-    clearAll,
-    selectShipper,
-    toggleOrderSelection,
-    beginRequest,
-    completeRequest,
-    failRequest,
-  };
+  return (
+    <div className="auth-callback">
+      <p>{message}</p>
+    </div>
+  );
 }
 </file>
 
@@ -2550,6 +3116,34 @@ export function distanceToNearestNodeMeters(point, nodes) {
   }
   return best;
 }
+</file>
+
+<file path="frontend/src/main.jsx">
+import React from "react";
+import ReactDOM from "react-dom/client";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import "leaflet/dist/leaflet.css";
+import "./App.css";
+import App from "./App";
+import AuthCallback from "./pages/AuthCallback";
+
+const queryClient = new QueryClient();
+const isAuthCallback = window.location.pathname === "/auth/callback";
+const RootComponent = isAuthCallback ? AuthCallback : App;
+
+ReactDOM.createRoot(document.getElementById("root")).render(
+  <React.StrictMode>
+    <QueryClientProvider client={queryClient}>
+      <RootComponent />
+    </QueryClientProvider>
+  </React.StrictMode>
+);
+</file>
+
+<file path="api/requirements.txt">
+fastapi>=0.110
+pydantic>=2
+PyJWT[crypto]>=2.8
 </file>
 
 <file path="backend/app/application/cost_matrix.py">
@@ -2646,131 +3240,6 @@ class CostMatrix:
             snap = snap_point(self._runtime, lat, lon)
             node_ids.append(snap.node_id)
         return node_ids
-</file>
-
-<file path="backend/app/domain/assignment.py">
-from __future__ import annotations
-
-from dataclasses import dataclass
-
-from app.domain.protocols import DistanceProvider
-
-
-@dataclass(frozen=True)
-class AssignmentSnapContext:
-    shipper_snap_distances: dict[str, float]
-    pickup_snap_distance: float
-    dropoff_snap_distance: float
-
-
-@dataclass(frozen=True)
-class ShipperRoute:
-    shipper_id: str
-    legs: list[tuple[str, list[str], float]]  # (kind, path_node_ids, distance)
-    total_distance_meters: float
-    feasible: bool
-
-
-@dataclass(frozen=True)
-class AssignmentResult:
-    recommended_shipper_id: str | None
-    ranking: list[ShipperRoute]
-
-
-def _assignment_total_distance(
-    shipper_id: str,
-    graph_total: float,
-    dist_to_pickup: float,
-    dist_pickup_to_dropoff: float,
-    snap_context: AssignmentSnapContext | None,
-) -> float:
-    if snap_context is None:
-        return graph_total
-
-    shipper_snap = snap_context.shipper_snap_distances[shipper_id]
-    pickup_snap = snap_context.pickup_snap_distance
-    dropoff_snap = snap_context.dropoff_snap_distance
-    # pickup_snap appears twice: snap onto the road at pickup (leg 1 end)
-    # and snap off the road at pickup (leg 2 start), matching assignment legs.
-    return (
-        shipper_snap
-        + dist_to_pickup
-        + pickup_snap
-        + pickup_snap
-        + dist_pickup_to_dropoff
-        + dropoff_snap
-    )
-
-
-def rank_shippers_for_order(
-    shipper_ids: list[str],
-    shipper_nodes: dict[str, str],  # shipper_id -> node_id
-    pickup_node: str,
-    dropoff_node: str,
-    cost_matrix: DistanceProvider,
-    *,
-    snap_context: AssignmentSnapContext | None = None,
-) -> AssignmentResult:
-    """Rank shippers by total distance for a single order.
-
-    For each shipper: total = SP(shipper→pickup) + SP(pickup→dropoff)
-    plus snap distances when `snap_context` is provided (matches API legs).
-    Returns sorted by total distance, tie-break by shipper_id.
-    """
-    routes: list[ShipperRoute] = []
-
-    for sid in shipper_ids:
-        snode = shipper_nodes[sid]
-
-        dist_to_pickup = cost_matrix.get_distance(snode, pickup_node)
-        dist_pickup_to_dropoff = cost_matrix.get_distance(pickup_node, dropoff_node)
-
-        unreachable = (
-            dist_to_pickup is None
-            or dist_pickup_to_dropoff is None
-            or dist_to_pickup == float("inf")
-            or dist_pickup_to_dropoff == float("inf")
-        )
-        if unreachable:
-            routes.append(ShipperRoute(
-                shipper_id=sid,
-                legs=[],
-                total_distance_meters=float("inf"),
-                feasible=False,
-            ))
-            continue
-
-        graph_total = dist_to_pickup + dist_pickup_to_dropoff
-        total = _assignment_total_distance(
-            sid, graph_total, dist_to_pickup, dist_pickup_to_dropoff, snap_context
-        )
-        path_to_pickup = cost_matrix.get_path(snode, pickup_node) or []
-        path_to_dropoff = cost_matrix.get_path(pickup_node, dropoff_node) or []
-
-        legs = [
-            ("to_pickup", path_to_pickup, dist_to_pickup),
-            ("to_dropoff", path_to_dropoff, dist_pickup_to_dropoff),
-        ]
-
-        routes.append(ShipperRoute(
-            shipper_id=sid,
-            legs=legs,
-            total_distance_meters=total,
-            feasible=True,
-        ))
-
-    routes.sort(key=lambda r: (not r.feasible, r.total_distance_meters, r.shipper_id))
-
-    recommended = None
-    for r in routes:
-        if r.feasible:
-            recommended = r.shipper_id
-            break
-
-    return AssignmentResult(
-        recommended_shipper_id=recommended,
-        ranking=routes,
-    )
 </file>
 
 <file path="backend/app/domain/dijkstra.py">
@@ -2947,6 +3416,32 @@ def _path_toward_end(
     if not suffix or suffix[-1] != end_node_id:
         return []
     return suffix
+</file>
+
+<file path="backend/app/domain/errors.py">
+ACCEPTED_AREA_DETAIL = "Error: Not in accepted area"
+NO_ROUTE_DETAIL = "No route found between selected points"
+
+
+class AcceptedAreaError(Exception):
+    """Point is outside accepted bbox or beyond max snap distance."""
+
+    def __init__(self, message: str = ACCEPTED_AREA_DETAIL) -> None:
+        super().__init__(message)
+
+
+class NoRouteError(Exception):
+    """Snapped start and end lie in disconnected graph components."""
+
+    def __init__(self, message: str = NO_ROUTE_DETAIL) -> None:
+        super().__init__(message)
+
+
+class AuthError(Exception):
+    """Invalid or missing authentication credentials."""
+
+    def __init__(self, message: str = "Authentication failed") -> None:
+        super().__init__(message)
 </file>
 
 <file path="backend/app/domain/graph.py">
@@ -3399,6 +3894,74 @@ def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
     return haversine_meters(lat1, lon1, lat2, lon2) / 1000.0
 </file>
 
+<file path="backend/tests/integration/test_no_external_runtime.py">
+"""VAL-BE-015 / VAL-DOM-022: MVP route endpoints must not call external HTTP providers."""
+
+from pathlib import Path
+
+import pytest
+import requests
+from fastapi.testclient import TestClient
+
+FIXTURE_GRAPH_PATH = (
+    Path(__file__).resolve().parents[2] / "app" / "data" / "road_graph.json"
+)
+
+VALID_START = {"latitude": 10.7785, "longitude": 106.7149}
+VALID_END = {"latitude": 10.7808, "longitude": 106.7172}
+
+
+class ExternalHttpBlocked(RuntimeError):
+    """Raised when runtime code attempts Overpass/OSRM or other external HTTP."""
+
+
+def _block_external_http(*_args, **_kwargs):
+    raise ExternalHttpBlocked("external HTTP is blocked for MVP runtime tests")
+
+
+TEST_AUTH_HEADER = {"Authorization": "Bearer test-token"}
+
+
+@pytest.fixture
+def client(monkeypatch):
+    monkeypatch.setenv("ROAD_FINDER_GRAPH_PATH", str(FIXTURE_GRAPH_PATH))
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setattr(requests, "get", _block_external_http)
+    monkeypatch.setattr(requests, "post", _block_external_http)
+    from app.main import create_app
+
+    with TestClient(create_app()) as test_client:
+        original_request = test_client.request
+
+        def authed_request(method, url, **kwargs):
+            headers = dict(kwargs.pop("headers", None) or {})
+            if "Authorization" not in headers:
+                headers.update(TEST_AUTH_HEADER)
+            kwargs["headers"] = headers
+            return original_request(method, url, **kwargs)
+
+        test_client.request = authed_request
+        yield test_client
+
+
+def test_health_graph_bounds_and_routes_without_external_http(client):
+    health = client.get("/health")
+    assert health.status_code == 200
+    assert health.json()["graph"]["loaded"] is True
+
+    bounds = client.get("/graph/bounds")
+    assert bounds.status_code == 200
+    assert bounds.json()["max_snap_distance_meters"] == 200
+
+    route = client.post(
+        "/route",
+        json={"start": VALID_START, "end": VALID_END},
+    )
+    assert route.status_code == 200
+    assert route.json()["distance"] > 0
+    assert len(route.json()["route_points"]) >= 2
+</file>
+
 <file path="backend/tests/unit/test_dijkstra.py">
 import json
 from pathlib import Path
@@ -3846,13 +4409,6 @@ def test_accepted_area_error_detail_for_api_mapping():
     assert str(err) == "Error: Not in accepted area"
 </file>
 
-<file path="backend/requirements.txt">
-fastapi
-uvicorn[standard]
-pydantic
-requests  # test-only: used by tests/integration/test_no_external_runtime.py to monkey-patch external HTTP
-</file>
-
 <file path="frontend/src/components/FleetResultPanel.jsx">
 import React, { useMemo } from "react";
 import { formatDistance } from "../utils/format";
@@ -4026,6 +4582,270 @@ ModeSwitcher.propTypes = {
 };
 </file>
 
+<file path="frontend/src/hooks/useVrpState.js">
+import { useCallback, useState } from "react";
+
+export const PLACEMENT_MODE = {
+  ORDER: "order",
+  SHIPPER: "shipper",
+};
+
+export const ORDER_STEP = {
+  SET_PICKUP: "set_pickup",
+  SET_DROPOFF: "set_dropoff",
+};
+
+export const VRP_STATUS = {
+  IDLE: "idle",
+  LOADING: "loading",
+  SUCCESS: "success",
+  ERROR: "error",
+};
+
+export const SHIPPER_COLORS = [
+  "#2563eb",
+  "#dc2626",
+  "#16a34a",
+  "#9333ea",
+  "#ea580c",
+  "#0891b2",
+  "#ca8a04",
+  "#e11d48",
+];
+
+export function getShipperColor(index) {
+  return SHIPPER_COLORS[index % SHIPPER_COLORS.length];
+}
+
+let _nextShipperId = 1;
+let _nextOrderId = 1;
+
+function _maxIdNumber(items, prefix) {
+  let max = 0;
+  for (const item of items) {
+    const match = item.id?.match(new RegExp(String.raw`^${prefix}(\d+)$`));
+    if (match) {
+      max = Math.max(max, Number.parseInt(match[1], 10));
+    }
+  }
+  return max;
+}
+
+function syncIdCounters(orders, shippers) {
+  _nextOrderId = _maxIdNumber(orders, "o") + 1;
+  _nextShipperId = _maxIdNumber(shippers, "s") + 1;
+}
+
+function clearTourOnEdit(setTourResult, setStatus, setErrorMessage) {
+  setTourResult(null);
+  setStatus(VRP_STATUS.IDLE);
+  setErrorMessage("");
+}
+
+export function useVrpState() {
+  const [placementMode, setPlacementMode] = useState(PLACEMENT_MODE.ORDER);
+  const [pendingPickup, setPendingPickup] = useState(null);
+  const [orders, setOrders] = useState([]);
+  const [shippers, setShippers] = useState([]);
+  const [selectedShipperId, setSelectedShipperId] = useState(null);
+  const [selectedOrderIds, setSelectedOrderIds] = useState([]);
+  const [tourResult, setTourResult] = useState(null);
+  const [status, setStatus] = useState(VRP_STATUS.IDLE);
+  const [errorMessage, setErrorMessage] = useState("");
+  const [avoidRoadTypes, setAvoidRoadTypes] = useState([]);
+
+  const resetTour = useCallback(() => {
+    clearTourOnEdit(setTourResult, setStatus, setErrorMessage);
+  }, []);
+
+  const setPickupForNewOrder = useCallback((point) => {
+    setPendingPickup(point);
+    setErrorMessage("");
+  }, []);
+
+  const setDropoffForPendingOrder = useCallback((point) => {
+    if (!pendingPickup) return;
+    const orderId = `o${_nextOrderId++}`;
+    setOrders((prev) => [
+      ...prev,
+      { id: orderId, pickup: pendingPickup, dropoff: point },
+    ]);
+    setPendingPickup(null);
+    resetTour();
+  }, [pendingPickup, resetTour]);
+
+  const cancelPendingPickup = useCallback(() => {
+    setPendingPickup(null);
+    setErrorMessage("");
+  }, []);
+
+  const addShipper = useCallback((point) => {
+    const newShipper = {
+      id: `s${_nextShipperId++}`,
+      location: point,
+    };
+    setShippers((prev) => [...prev, newShipper]);
+    setSelectedShipperId((current) => current ?? newShipper.id);
+    resetTour();
+  }, [resetTour]);
+
+  const removeOrder = useCallback((orderId) => {
+    setOrders((prev) => prev.filter((o) => o.id !== orderId));
+    setSelectedOrderIds((prev) => prev.filter((id) => id !== orderId));
+    resetTour();
+  }, [resetTour]);
+
+  const removeShipper = useCallback((shipperId) => {
+    setShippers((prev) => {
+      const next = prev.filter((s) => s.id !== shipperId);
+      setSelectedShipperId((current) => {
+        if (current !== shipperId) return current;
+        return next[0]?.id ?? null;
+      });
+      return next;
+    });
+    resetTour();
+  }, [resetTour]);
+
+  const clearAll = useCallback(() => {
+    setOrders([]);
+    setShippers([]);
+    setPendingPickup(null);
+    setSelectedShipperId(null);
+    setSelectedOrderIds([]);
+    setTourResult(null);
+    setStatus(VRP_STATUS.IDLE);
+    setErrorMessage("");
+  }, []);
+
+  const selectShipper = useCallback((shipperId) => {
+    setSelectedShipperId(shipperId);
+    resetTour();
+  }, [resetTour]);
+
+  const toggleOrderSelection = useCallback((orderId) => {
+    setSelectedOrderIds((prev) =>
+      prev.includes(orderId)
+        ? prev.filter((id) => id !== orderId)
+        : [...prev, orderId]
+    );
+    resetTour();
+  }, [resetTour]);
+
+  const beginRequest = useCallback(() => {
+    setStatus(VRP_STATUS.LOADING);
+    setErrorMessage("");
+  }, []);
+
+  const completeRequest = useCallback((data) => {
+    setTourResult(data);
+    setStatus(VRP_STATUS.SUCCESS);
+    setErrorMessage("");
+  }, []);
+
+  const failRequest = useCallback((message) => {
+    setStatus(VRP_STATUS.ERROR);
+    setErrorMessage(message || "Có lỗi xảy ra.");
+  }, []);
+
+  const getScenarioSnapshot = useCallback(
+    () => ({
+      orders,
+      shippers,
+      selectedShipperId,
+      selectedOrderIds,
+      avoidRoadTypes,
+    }),
+    [orders, shippers, selectedShipperId, selectedOrderIds, avoidRoadTypes]
+  );
+
+  const loadScenario = useCallback((payload) => {
+    const nextOrders = payload?.orders ?? [];
+    const nextShippers = payload?.shippers ?? [];
+    syncIdCounters(nextOrders, nextShippers);
+    setOrders(nextOrders);
+    setShippers(nextShippers);
+    setSelectedShipperId(
+      payload?.selectedShipperId ?? nextShippers[0]?.id ?? null
+    );
+    setSelectedOrderIds(payload?.selectedOrderIds ?? []);
+    setAvoidRoadTypes(payload?.avoidRoadTypes ?? []);
+    setPendingPickup(null);
+    setTourResult(null);
+    setStatus(VRP_STATUS.IDLE);
+    setErrorMessage("");
+  }, []);
+
+  const canOptimize =
+    Boolean(selectedShipperId) &&
+    selectedOrderIds.length > 0 &&
+    status !== VRP_STATUS.LOADING;
+
+  const orderStep = pendingPickup
+    ? ORDER_STEP.SET_DROPOFF
+    : ORDER_STEP.SET_PICKUP;
+
+  return {
+    placementMode,
+    setPlacementMode,
+    orderStep,
+    pendingPickup,
+    orders,
+    shippers,
+    selectedShipperId,
+    selectedOrderIds,
+    tourResult,
+    status,
+    errorMessage,
+    avoidRoadTypes,
+    setAvoidRoadTypes,
+    canOptimize,
+    setPickupForNewOrder,
+    setDropoffForPendingOrder,
+    cancelPendingPickup,
+    addShipper,
+    removeOrder,
+    removeShipper,
+    clearAll,
+    selectShipper,
+    toggleOrderSelection,
+    beginRequest,
+    completeRequest,
+    failRequest,
+    getScenarioSnapshot,
+    loadScenario,
+  };
+}
+</file>
+
+<file path="vercel.json">
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "cd frontend && npm install && VITE_API_BASE_URL= npm run build",
+  "outputDirectory": "frontend/dist",
+  "installCommand": "cd frontend && npm install",
+  "framework": null,
+  "rewrites": [
+    { "source": "/auth/session", "destination": "/api" },
+    { "source": "/auth/me", "destination": "/api" },
+    { "source": "/health", "destination": "/api" },
+    { "source": "/graph/:path*", "destination": "/api" },
+    { "source": "/route", "destination": "/api" },
+    { "source": "/assignments", "destination": "/api" },
+    { "source": "/tours", "destination": "/api" },
+    { "source": "/fleet", "destination": "/api" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ],
+  "functions": {
+    "api/*.py": {
+      "memory": 1024,
+      "maxDuration": 60,
+      "includeFiles": "backend/app/**"
+    }
+  }
+}
+</file>
+
 <file path="backend/app/application/graph_runtime.py">
 from __future__ import annotations
 
@@ -4113,6 +4933,131 @@ def build_graph_runtime(path: Path | str | None = None) -> GraphRuntime:
         base_adjacency=adjacency,
         grid_index=grid_index,
         route_cache=route_cache,
+    )
+</file>
+
+<file path="backend/app/domain/assignment.py">
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from app.domain.protocols import DistanceProvider
+
+
+@dataclass(frozen=True)
+class AssignmentSnapContext:
+    shipper_snap_distances: dict[str, float]
+    pickup_snap_distance: float
+    dropoff_snap_distance: float
+
+
+@dataclass(frozen=True)
+class ShipperRoute:
+    shipper_id: str
+    legs: list[tuple[str, list[str], float]]  # (kind, path_node_ids, distance)
+    total_distance_meters: float
+    feasible: bool
+
+
+@dataclass(frozen=True)
+class AssignmentResult:
+    recommended_shipper_id: str | None
+    ranking: list[ShipperRoute]
+
+
+def _assignment_total_distance(
+    shipper_id: str,
+    graph_total: float,
+    dist_to_pickup: float,
+    dist_pickup_to_dropoff: float,
+    snap_context: AssignmentSnapContext | None,
+) -> float:
+    if snap_context is None:
+        return graph_total
+
+    shipper_snap = snap_context.shipper_snap_distances[shipper_id]
+    pickup_snap = snap_context.pickup_snap_distance
+    dropoff_snap = snap_context.dropoff_snap_distance
+    # pickup_snap appears twice: snap onto the road at pickup (leg 1 end)
+    # and snap off the road at pickup (leg 2 start), matching assignment legs.
+    return (
+        shipper_snap
+        + dist_to_pickup
+        + pickup_snap
+        + pickup_snap
+        + dist_pickup_to_dropoff
+        + dropoff_snap
+    )
+
+
+def rank_shippers_for_order(
+    shipper_ids: list[str],
+    shipper_nodes: dict[str, str],  # shipper_id -> node_id
+    pickup_node: str,
+    dropoff_node: str,
+    cost_matrix: DistanceProvider,
+    *,
+    snap_context: AssignmentSnapContext | None = None,
+) -> AssignmentResult:
+    """Rank shippers by total distance for a single order.
+
+    For each shipper: total = SP(shipper→pickup) + SP(pickup→dropoff)
+    plus snap distances when `snap_context` is provided (matches API legs).
+    Returns sorted by total distance, tie-break by shipper_id.
+    """
+    routes: list[ShipperRoute] = []
+
+    for sid in shipper_ids:
+        snode = shipper_nodes[sid]
+
+        dist_to_pickup = cost_matrix.get_distance(snode, pickup_node)
+        dist_pickup_to_dropoff = cost_matrix.get_distance(pickup_node, dropoff_node)
+
+        unreachable = (
+            dist_to_pickup is None
+            or dist_pickup_to_dropoff is None
+            or dist_to_pickup == float("inf")
+            or dist_pickup_to_dropoff == float("inf")
+        )
+        if unreachable:
+            routes.append(ShipperRoute(
+                shipper_id=sid,
+                legs=[],
+                total_distance_meters=float("inf"),
+                feasible=False,
+            ))
+            continue
+
+        graph_total = dist_to_pickup + dist_pickup_to_dropoff
+        total = _assignment_total_distance(
+            sid, graph_total, dist_to_pickup, dist_pickup_to_dropoff, snap_context
+        )
+        path_to_pickup = cost_matrix.get_path(snode, pickup_node) or []
+        path_to_dropoff = cost_matrix.get_path(pickup_node, dropoff_node) or []
+
+        legs = [
+            ("to_pickup", path_to_pickup, dist_to_pickup),
+            ("to_dropoff", path_to_dropoff, dist_pickup_to_dropoff),
+        ]
+
+        routes.append(ShipperRoute(
+            shipper_id=sid,
+            legs=legs,
+            total_distance_meters=total,
+            feasible=True,
+        ))
+
+    routes.sort(key=lambda r: (not r.feasible, r.total_distance_meters, r.shipper_id))
+
+    recommended = None
+    for r in routes:
+        if r.feasible:
+            recommended = r.shipper_id
+            break
+
+    return AssignmentResult(
+        recommended_shipper_id=recommended,
+        ranking=routes,
     )
 </file>
 
@@ -4239,27 +5184,206 @@ def compute_shortest_path_response(
     )
 </file>
 
-<file path="backend/tests/integration/test_route_api.py">
+<file path="backend/tests/unit/test_route_cache.py">
+import json
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
+
+from app.application.graph_runtime import build_graph_runtime
+from app.domain.dijkstra import bidirectional_dijkstra
+from app.infrastructure.route_cache import (
+    CachedGraphPath,
+    RouteCache,
+    make_cache_key,
+)
+from app.services.shortest_path_service import find_cached_or_compute_graph_path
 
 FIXTURE_GRAPH_PATH = (
     Path(__file__).resolve().parents[2] / "app" / "data" / "road_graph.json"
 )
 
-VALID_START = {"latitude": 10.7785, "longitude": 106.7149}
-VALID_END = {"latitude": 10.7808, "longitude": 106.7172}
+
+def test_make_cache_key_uses_version_and_node_ids_only():
+    assert make_cache_key("v1", "opts", "a", "b") == "v1|opts|a|b"
+    assert make_cache_key("v1", "opts", "a", "b") == make_cache_key("v1", "opts", "a", "b")
+
+
+def test_first_put_increases_size():
+    cache = RouteCache(limit=1000)
+    cache.put(
+        "v1",
+        "opts",
+        "node-start",
+        "node-end",
+        CachedGraphPath(node_ids=["node-start", "node-end"], graph_distance_meters=1.0),
+    )
+    assert cache.size == 1
+
+
+def test_get_moves_entry_to_mru_for_lru_eviction():
+    cache = RouteCache(limit=2)
+    cache.put("v", "o", "a", "b", CachedGraphPath(["a", "b"], 1.0))
+    cache.put("v", "o", "c", "d", CachedGraphPath(["c", "d"], 2.0))
+    assert cache.get("v", "o", "a", "b") is not None
+    cache.put("v", "o", "e", "f", CachedGraphPath(["e", "f"], 3.0))
+    assert cache.get("v", "o", "c", "d") is None
+    assert cache.get("v", "o", "a", "b") is not None
+    assert cache.size == 2
+
+
+def test_lru_evicts_oldest_when_exceeding_limit():
+    cache = RouteCache(limit=1000)
+    for i in range(1001):
+        cache.put(
+            "v",
+            "o",
+            f"n{i}",
+            f"m{i}",
+            CachedGraphPath(node_ids=[f"n{i}", f"m{i}"], graph_distance_meters=float(i)),
+        )
+    assert cache.size == 1000
+    assert cache.get("v", "o", "n0", "m0") is None
+    assert cache.get("v", "o", "n1000", "m1000") is not None
+
+
+def test_reverse_lookup_does_not_synthesize_from_forward_entry():
+    cache = RouteCache()
+    cache.put(
+        "hcm-fixture-v2",
+        "opts",
+        "node-start",
+        "node-end",
+        CachedGraphPath(
+            node_ids=["node-start", "node-mid", "node-end"],
+            graph_distance_meters=300.5,
+        ),
+    )
+    assert cache.get("hcm-fixture-v2", "opts", "node-end", "node-start") is None
+    assert cache.size == 1
+
+
+def test_different_graph_version_is_distinct_key():
+    cache = RouteCache()
+    cache.put("v1", "o", "a", "b", CachedGraphPath(["a", "b"], 1.0))
+    assert cache.get("v2", "o", "a", "b") is None
+    assert cache.size == 1
 
 
 @pytest.fixture
-def client(monkeypatch):
-    monkeypatch.setenv("ROAD_FINDER_GRAPH_PATH", str(FIXTURE_GRAPH_PATH))
-    from app.main import create_app
+def runtime():
+    return build_graph_runtime(FIXTURE_GRAPH_PATH)
 
-    with TestClient(create_app()) as c:
-        yield c
+
+def test_service_same_snapped_pair_does_not_duplicate_cache_entries(runtime):
+    start_a = (10.7785, 106.7149)
+    start_b = (10.7786, 106.7150)
+    end = (10.7808, 106.7172)
+    first = find_cached_or_compute_graph_path(runtime, start_a, end)
+    size_after_first = runtime.route_cache.size
+    second = find_cached_or_compute_graph_path(runtime, start_b, end)
+    assert second.from_cache is True
+    assert runtime.route_cache.size == size_after_first
+    assert first.graph_path.node_ids == second.graph_path.node_ids
+    assert first.graph_path.graph_distance_meters == pytest.approx(
+        second.graph_path.graph_distance_meters
+    )
+
+
+def test_service_reverse_computes_separate_cache_entry_on_directed_graph(runtime):
+    forward = find_cached_or_compute_graph_path(
+        runtime, (10.7785, 106.7149), (10.7808, 106.7172)
+    )
+    assert forward.from_cache is False
+    size_one = runtime.route_cache.size
+    reverse = find_cached_or_compute_graph_path(
+        runtime, (10.7808, 106.7172), (10.7785, 106.7149)
+    )
+    assert reverse.from_cache is False
+    assert runtime.route_cache.size == size_one + 1
+    assert reverse.graph_path.graph_distance_meters == pytest.approx(
+        forward.graph_path.graph_distance_meters
+    )
+
+
+def test_oneway_reverse_is_not_served_from_forward_cache(tmp_path):
+    path = _write_versioned_graph(
+        tmp_path,
+        "oneway-v1",
+        edges=[{"from": "a", "to": "b", "distance": 100.0, "oneway": True}],
+    )
+    runtime = build_graph_runtime(path)
+    from app.domain.errors import NoRouteError
+
+    forward = find_cached_or_compute_graph_path(runtime, (10.5, 106.5), (10.51, 106.51))
+    assert forward.from_cache is False
+    with pytest.raises(NoRouteError):
+        find_cached_or_compute_graph_path(runtime, (10.51, 106.51), (10.5, 106.5))
+    assert runtime.route_cache.get(
+        runtime.metadata.graph_version,
+        "[]|[]",
+        "b",
+        "a",
+    ) is None
+
+
+def _write_versioned_graph(
+    tmp_path: Path,
+    version: str,
+    *,
+    edges: list[dict] | None = None,
+) -> Path:
+    path = (tmp_path / "graph.json").resolve()
+    assert path.is_relative_to(tmp_path.resolve())
+    payload = {
+        "metadata": {
+            "graph_version": version,
+            "bbox": {
+                "min_latitude": 10.0,
+                "min_longitude": 106.0,
+                "max_latitude": 11.0,
+                "max_longitude": 107.0,
+            },
+            "max_snap_distance_meters": 500.0,
+        },
+        "nodes": {
+            "a": {"latitude": 10.5, "longitude": 106.5},
+            "b": {"latitude": 10.51, "longitude": 106.51},
+        },
+        "edges": edges if edges is not None else [{"from": "a", "to": "b", "distance": 10.0}],
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_version_change_does_not_reuse_old_cache_entry(tmp_path):
+    path_v1 = _write_versioned_graph(tmp_path, "cache-v1")
+    rt1 = build_graph_runtime(path_v1)
+    find_cached_or_compute_graph_path(rt1, (10.5, 106.5), (10.51, 106.51))
+    assert rt1.route_cache.size == 1
+
+    path_v2 = _write_versioned_graph(tmp_path, "cache-v2")
+    rt2 = build_graph_runtime(path_v2)
+    assert rt2.route_cache.size == 0
+    result = find_cached_or_compute_graph_path(rt2, (10.5, 106.5), (10.51, 106.51))
+    assert result.from_cache is False
+    dijkstra = bidirectional_dijkstra(rt2.adjacency, "a", "b")
+    assert result.graph_path.node_ids == dijkstra.node_ids
+</file>
+
+<file path="backend/requirements.txt">
+fastapi
+uvicorn[standard]
+pydantic
+PyJWT[crypto]>=2.8
+requests  # test-only: used by tests/integration/test_no_external_runtime.py to monkey-patch external HTTP
+</file>
+
+<file path="backend/tests/integration/test_route_api.py">
+import pytest
+
+VALID_START = {"latitude": 10.7785, "longitude": 106.7149}
+VALID_END = {"latitude": 10.7808, "longitude": 106.7172}
 
 
 def test_graph_bounds_returns_metadata(client):
@@ -4608,90 +5732,25 @@ def test_tours_threshold_zero_disables_brute_force(client):
     assert body["optimal"] is False
 </file>
 
-<file path="backend/tests/unit/test_route_cache.py">
-import json
+<file path="backend/tests/unit/test_route_reconstruction.py">
 from pathlib import Path
 
 import pytest
 
 from app.application.graph_runtime import build_graph_runtime
+from app.application.node_lookup import GraphNodeLookup
 from app.domain.dijkstra import bidirectional_dijkstra
-from app.infrastructure.route_cache import (
-    CachedGraphPath,
-    RouteCache,
-    make_cache_key,
+from app.domain.route_reconstruction import (
+    RouteCoordinate,
+    compute_total_distance_meters,
+    dedupe_adjacent_exact_coordinates,
+    reconstruct_route_points,
 )
-from app.services.shortest_path_service import find_cached_or_compute_graph_path
+from app.application.snap_service import snap_point
 
 FIXTURE_GRAPH_PATH = (
     Path(__file__).resolve().parents[2] / "app" / "data" / "road_graph.json"
 )
-
-
-def test_make_cache_key_uses_version_and_node_ids_only():
-    assert make_cache_key("v1", "opts", "a", "b") == "v1|opts|a|b"
-    assert make_cache_key("v1", "opts", "a", "b") == make_cache_key("v1", "opts", "a", "b")
-
-
-def test_first_put_increases_size():
-    cache = RouteCache(limit=1000)
-    cache.put(
-        "v1",
-        "opts",
-        "node-start",
-        "node-end",
-        CachedGraphPath(node_ids=["node-start", "node-end"], graph_distance_meters=1.0),
-    )
-    assert cache.size == 1
-
-
-def test_get_moves_entry_to_mru_for_lru_eviction():
-    cache = RouteCache(limit=2)
-    cache.put("v", "o", "a", "b", CachedGraphPath(["a", "b"], 1.0))
-    cache.put("v", "o", "c", "d", CachedGraphPath(["c", "d"], 2.0))
-    assert cache.get("v", "o", "a", "b") is not None
-    cache.put("v", "o", "e", "f", CachedGraphPath(["e", "f"], 3.0))
-    assert cache.get("v", "o", "c", "d") is None
-    assert cache.get("v", "o", "a", "b") is not None
-    assert cache.size == 2
-
-
-def test_lru_evicts_oldest_when_exceeding_limit():
-    cache = RouteCache(limit=1000)
-    for i in range(1001):
-        cache.put(
-            "v",
-            "o",
-            f"n{i}",
-            f"m{i}",
-            CachedGraphPath(node_ids=[f"n{i}", f"m{i}"], graph_distance_meters=float(i)),
-        )
-    assert cache.size == 1000
-    assert cache.get("v", "o", "n0", "m0") is None
-    assert cache.get("v", "o", "n1000", "m1000") is not None
-
-
-def test_reverse_lookup_does_not_synthesize_from_forward_entry():
-    cache = RouteCache()
-    cache.put(
-        "hcm-fixture-v2",
-        "opts",
-        "node-start",
-        "node-end",
-        CachedGraphPath(
-            node_ids=["node-start", "node-mid", "node-end"],
-            graph_distance_meters=300.5,
-        ),
-    )
-    assert cache.get("hcm-fixture-v2", "opts", "node-end", "node-start") is None
-    assert cache.size == 1
-
-
-def test_different_graph_version_is_distinct_key():
-    cache = RouteCache()
-    cache.put("v1", "o", "a", "b", CachedGraphPath(["a", "b"], 1.0))
-    assert cache.get("v2", "o", "a", "b") is None
-    assert cache.size == 1
 
 
 @pytest.fixture
@@ -4699,100 +5758,804 @@ def runtime():
     return build_graph_runtime(FIXTURE_GRAPH_PATH)
 
 
-def test_service_same_snapped_pair_does_not_duplicate_cache_entries(runtime):
-    start_a = (10.7785, 106.7149)
-    start_b = (10.7786, 106.7150)
+def _coord(lat: float, lon: float) -> RouteCoordinate:
+    return RouteCoordinate(latitude=lat, longitude=lon)
+
+
+def test_route_points_begin_with_clicked_start_and_end_with_clicked_end(runtime):
+    start = (10.7785, 106.7149)
     end = (10.7808, 106.7172)
-    first = find_cached_or_compute_graph_path(runtime, start_a, end)
-    size_after_first = runtime.route_cache.size
-    second = find_cached_or_compute_graph_path(runtime, start_b, end)
-    assert second.from_cache is True
-    assert runtime.route_cache.size == size_after_first
-    assert first.graph_path.node_ids == second.graph_path.node_ids
-    assert first.graph_path.graph_distance_meters == pytest.approx(
-        second.graph_path.graph_distance_meters
+    start_snap = snap_point(runtime, start[0], start[1])
+    end_snap = snap_point(runtime, end[0], end[1])
+    dijkstra = bidirectional_dijkstra(
+        runtime.adjacency, start_snap.node_id, end_snap.node_id
+    )
+    route = reconstruct_route_points(
+        GraphNodeLookup(runtime.nodes),
+        clicked_start=start,
+        clicked_end=end,
+        dijkstra_node_ids=dijkstra.node_ids,
+    )
+    assert route[0].latitude == pytest.approx(start[0])
+    assert route[0].longitude == pytest.approx(start[1])
+    assert route[-1].latitude == pytest.approx(end[0])
+    assert route[-1].longitude == pytest.approx(end[1])
+
+
+def test_intermediate_points_follow_dijkstra_node_order(runtime):
+    start = (10.7785, 106.7149)
+    end = (10.7808, 106.7172)
+    start_snap = snap_point(runtime, start[0], start[1])
+    end_snap = snap_point(runtime, end[0], end[1])
+    dijkstra = bidirectional_dijkstra(
+        runtime.adjacency, start_snap.node_id, end_snap.node_id
+    )
+    route = reconstruct_route_points(
+        GraphNodeLookup(runtime.nodes),
+        clicked_start=start,
+        clicked_end=end,
+        dijkstra_node_ids=dijkstra.node_ids,
+    )
+    mid = runtime.nodes["node-mid"]
+    assert any(
+        p.latitude == pytest.approx(mid.latitude)
+        and p.longitude == pytest.approx(mid.longitude)
+        for p in route[1:-1]
+    )
+    assert dijkstra.node_ids == ["node-start", "node-mid", "node-end"]
+
+
+def test_exact_endpoint_on_node_dedupes_adjacent_duplicate(runtime):
+    node = runtime.nodes["node-start"]
+    start = (node.latitude, node.longitude)
+    end = (10.7808, 106.7172)
+    start_snap = snap_point(runtime, start[0], start[1])
+    end_snap = snap_point(runtime, end[0], end[1])
+    dijkstra = bidirectional_dijkstra(
+        runtime.adjacency, start_snap.node_id, end_snap.node_id
+    )
+    route = reconstruct_route_points(
+        GraphNodeLookup(runtime.nodes),
+        clicked_start=start,
+        clicked_end=end,
+        dijkstra_node_ids=dijkstra.node_ids,
+    )
+    assert route[0].latitude == pytest.approx(start[0])
+    assert not _has_adjacent_duplicate(route)
+
+
+def test_non_identical_snap_segment_preserved_when_offset_from_node(runtime):
+    start = (10.7785, 106.7149)
+    end = (10.7808, 106.7172)
+    start_snap = snap_point(runtime, start[0], start[1])
+    end_snap = snap_point(runtime, end[0], end[1])
+    assert start_snap.distance_meters > 0.0
+    dijkstra = bidirectional_dijkstra(
+        runtime.adjacency, start_snap.node_id, end_snap.node_id
+    )
+    route = reconstruct_route_points(
+        GraphNodeLookup(runtime.nodes),
+        clicked_start=start,
+        clicked_end=end,
+        dijkstra_node_ids=dijkstra.node_ids,
+    )
+    assert len(route) >= 3
+    assert route[0].latitude == pytest.approx(start[0])
+
+
+def test_distance_matches_independent_fixture_calculation(runtime):
+    start = (10.7785, 106.7149)
+    end = (10.7808, 106.7172)
+    start_snap = snap_point(runtime, start[0], start[1])
+    end_snap = snap_point(runtime, end[0], end[1])
+    dijkstra = bidirectional_dijkstra(
+        runtime.adjacency, start_snap.node_id, end_snap.node_id
+    )
+    distance = compute_total_distance_meters(
+        start_snap_distance_meters=start_snap.distance_meters,
+        end_snap_distance_meters=end_snap.distance_meters,
+        graph_distance_meters=dijkstra.graph_distance_meters,
+    )
+    expected = (
+        start_snap.distance_meters
+        + dijkstra.graph_distance_meters
+        + end_snap.distance_meters
+    )
+    assert distance == pytest.approx(expected, rel=1e-9, abs=1e-6)
+
+
+def test_same_snapped_node_returns_snap_only_route(runtime):
+    lat, lon = 10.77925, 106.71555
+    start = (lat, lon)
+    end = (lat + 0.00005, lon + 0.00005)
+    start_snap = snap_point(runtime, start[0], start[1])
+    end_snap = snap_point(runtime, end[0], end[1])
+    assert start_snap.node_id == end_snap.node_id == "node-mid"
+    dijkstra = bidirectional_dijkstra(
+        runtime.adjacency, start_snap.node_id, end_snap.node_id
+    )
+    assert dijkstra.node_ids == ["node-mid"]
+    assert dijkstra.graph_distance_meters == pytest.approx(0.0)
+    route = reconstruct_route_points(
+        GraphNodeLookup(runtime.nodes),
+        clicked_start=start,
+        clicked_end=end,
+        dijkstra_node_ids=dijkstra.node_ids,
+    )
+    assert route[0].latitude == pytest.approx(start[0])
+    assert route[-1].latitude == pytest.approx(end[0])
+    distance = compute_total_distance_meters(
+        start_snap.distance_meters,
+        end_snap.distance_meters,
+        dijkstra.graph_distance_meters,
+    )
+    assert distance == pytest.approx(
+        start_snap.distance_meters + end_snap.distance_meters, rel=1e-9
+    )
+    for _ in range(10):
+        again = reconstruct_route_points(
+            GraphNodeLookup(runtime.nodes),
+            clicked_start=start,
+            clicked_end=end,
+            dijkstra_node_ids=dijkstra.node_ids,
+        )
+        assert [(p.latitude, p.longitude) for p in again] == [
+            (p.latitude, p.longitude) for p in route
+        ]
+
+
+def test_dedupe_adjacent_exact_coordinates_only():
+    raw = [
+        _coord(1.0, 1.0),
+        _coord(1.0, 1.0),
+        _coord(2.0, 2.0),
+        _coord(3.0, 3.0),
+        _coord(3.0, 3.0),
+    ]
+    deduped = dedupe_adjacent_exact_coordinates(raw)
+    assert len(deduped) == 3
+    assert deduped[0].latitude == pytest.approx(1.0)
+    assert deduped[1].latitude == pytest.approx(2.0)
+    assert deduped[2].latitude == pytest.approx(3.0)
+
+
+def _has_adjacent_duplicate(route: list[RouteCoordinate]) -> bool:
+    for i in range(1, len(route)):
+        a, b = route[i - 1], route[i]
+        if (
+            abs(a.latitude - b.latitude) <= 1e-9
+            and abs(a.longitude - b.longitude) <= 1e-9
+        ):
+            return True
+    return False
+</file>
+
+<file path="frontend/package.json">
+{
+  "name": "road-finder-frontend",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.108.2",
+    "@tanstack/react-query": "^5.59.16",
+    "leaflet": "^1.9.4",
+    "prop-types": "^15.8.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-leaflet": "^4.2.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.3",
+    "vite": "^5.4.8"
+  }
+}
+</file>
+
+<file path="backend/app/domain/tsp.py">
+from __future__ import annotations
+
+from dataclasses import dataclass
+from itertools import permutations
+
+from app.domain.cost_model import DEFAULT_TSP_BRUTE_FORCE_MAX_STOPS, RoutingOptions
+from app.domain.protocols import DistanceProvider
+from app.domain.two_opt import two_opt_improve
+
+
+@dataclass(frozen=True)
+class Stop:
+    order_id: str
+    kind: str  # "pickup" or "dropoff"
+    node_id: str
+
+
+@dataclass(frozen=True)
+class Tour:
+    ordered_stops: list[Stop]
+    total_distance_meters: float
+    optimal: bool
+    feasible: bool = True
+
+
+def _check_precedence(stops: list[Stop]) -> bool:
+    """Check that for each order, pickup appears before dropoff."""
+    seen: dict[str, str] = {}  # order_id -> first kind seen
+    for stop in stops:
+        if stop.order_id not in seen:
+            seen[stop.order_id] = stop.kind
+        elif stop.kind == "pickup" and seen[stop.order_id] == "dropoff":
+            return False
+    return True
+
+
+def _tour_distance(stops: list[Stop], cost_matrix: DistanceProvider) -> float:
+    """Compute total distance for a sequence of stops."""
+    if len(stops) < 2:
+        return 0.0
+
+    total = 0.0
+    for i in range(len(stops) - 1):
+        dist = cost_matrix.get_distance(stops[i].node_id, stops[i + 1].node_id)
+        if dist is None or dist == float("inf"):
+            return float("inf")
+        total += dist
+    return total
+
+
+def _tour_distance_from_shipper(
+    shipper_node: str,
+    stops: list[Stop],
+    cost_matrix: DistanceProvider,
+) -> float:
+    if not stops:
+        return 0.0
+    total = 0.0
+    current = shipper_node
+    for stop in stops:
+        dist = cost_matrix.get_distance(current, stop.node_id)
+        if dist is None or dist == float("inf"):
+            return float("inf")
+        total += dist
+        current = stop.node_id
+    return total
+
+
+def _infeasible_tour() -> Tour:
+    return Tour(
+        ordered_stops=[],
+        total_distance_meters=0.0,
+        optimal=False,
+        feasible=False,
     )
 
 
-def test_service_reverse_computes_separate_cache_entry_on_directed_graph(runtime):
-    forward = find_cached_or_compute_graph_path(
-        runtime, (10.7785, 106.7149), (10.7808, 106.7172)
+def _is_dropoff_eligible(
+    stop: Stop,
+    visited_orders: dict[str, set[str]],
+    remaining: list[Stop],
+) -> bool:
+    """Check if a dropoff stop can be visited (pickup already done or no pickup left)."""
+    if stop.kind != "dropoff":
+        return True
+    visited = visited_orders.get(stop.order_id, set())
+    if "pickup" in visited:
+        return True
+    has_pickup_remaining = any(
+        s.order_id == stop.order_id and s.kind == "pickup" for s in remaining
     )
-    assert forward.from_cache is False
-    size_one = runtime.route_cache.size
-    reverse = find_cached_or_compute_graph_path(
-        runtime, (10.7808, 106.7172), (10.7785, 106.7149)
+    return not has_pickup_remaining
+
+
+def _find_nearest_valid_stop(
+    remaining: list[Stop],
+    current_node: str,
+    visited_orders: dict[str, set[str]],
+    cost_matrix: DistanceProvider,
+) -> int:
+    """Find the index of the nearest valid stop; -1 if none."""
+    best_idx = -1
+    best_dist = float("inf")
+
+    for i, stop in enumerate(remaining):
+        if not _is_dropoff_eligible(stop, visited_orders, remaining):
+            continue
+        dist = cost_matrix.get_distance(current_node, stop.node_id)
+        if dist is not None and dist < best_dist:
+            best_dist = dist
+            best_idx = i
+
+    return best_idx
+
+
+def _nearest_neighbor_heuristic(
+    stops: list[Stop],
+    cost_matrix: DistanceProvider,
+    start_node: str | None = None,
+) -> list[Stop] | None:
+    """Nearest-neighbor heuristic respecting precedence constraints."""
+    if not stops:
+        return []
+
+    remaining = list(stops)
+    result: list[Stop] = []
+    visited_orders: dict[str, set[str]] = {}
+
+    current_node = _initialize_start(
+        remaining, result, visited_orders, start_node
     )
-    assert reverse.from_cache is False
-    assert runtime.route_cache.size == size_one + 1
-    assert reverse.graph_path.graph_distance_meters == pytest.approx(
-        forward.graph_path.graph_distance_meters
-    )
+
+    while remaining:
+        best_idx = _find_nearest_valid_stop(
+            remaining, current_node, visited_orders, cost_matrix
+        )
+        if best_idx < 0:
+            return None
+
+        chosen = remaining.pop(best_idx)
+        result.append(chosen)
+        visited_orders.setdefault(chosen.order_id, set()).add(chosen.kind)
+        current_node = chosen.node_id
+
+    return result
 
 
-def test_oneway_reverse_is_not_served_from_forward_cache(tmp_path):
-    path = _write_versioned_graph(
-        tmp_path,
-        "oneway-v1",
-        edges=[{"from": "a", "to": "b", "distance": 100.0, "oneway": True}],
-    )
-    runtime = build_graph_runtime(path)
-    from app.domain.errors import NoRouteError
-
-    forward = find_cached_or_compute_graph_path(runtime, (10.5, 106.5), (10.51, 106.51))
-    assert forward.from_cache is False
-    with pytest.raises(NoRouteError):
-        find_cached_or_compute_graph_path(runtime, (10.51, 106.51), (10.5, 106.5))
-    assert runtime.route_cache.get(
-        runtime.metadata.graph_version,
-        "[]|[]",
-        "b",
-        "a",
-    ) is None
+def _initialize_start(
+    remaining: list[Stop],
+    result: list[Stop],
+    visited_orders: dict[str, set[str]],
+    start_node: str | None,
+) -> str:
+    """Set up the starting point for nearest-neighbor; return current node."""
+    if start_node:
+        return start_node
+    first = remaining.pop(0)
+    result.append(first)
+    visited_orders.setdefault(first.order_id, set()).add(first.kind)
+    return first.node_id
 
 
-def _write_versioned_graph(
-    tmp_path: Path,
-    version: str,
+def optimize_tour(
+    shipper_node: str,
+    stops: list[Stop],
+    cost_matrix: DistanceProvider,
     *,
-    edges: list[dict] | None = None,
-) -> Path:
-    path = (tmp_path / "graph.json").resolve()
-    assert path.is_relative_to(tmp_path.resolve())
-    payload = {
-        "metadata": {
-            "graph_version": version,
-            "bbox": {
-                "min_latitude": 10.0,
-                "min_longitude": 106.0,
-                "max_latitude": 11.0,
-                "max_longitude": 107.0,
-            },
-            "max_snap_distance_meters": 500.0,
-        },
-        "nodes": {
-            "a": {"latitude": 10.5, "longitude": 106.5},
-            "b": {"latitude": 10.51, "longitude": 106.51},
-        },
-        "edges": edges if edges is not None else [{"from": "a", "to": "b", "distance": 10.0}],
-    }
-    path.write_text(json.dumps(payload), encoding="utf-8")
-    return path
+    options: RoutingOptions | None = None,
+) -> Tour:
+    """Optimize a tour for a single shipper visiting multiple stops.
+
+    For n ≤ threshold: brute-force optimal.
+    For n > threshold: nearest-neighbor + 2-opt heuristic.
+
+    Threshold comes from `options.tsp_brute_force_max_stops` or the module default.
+    A threshold of 0 disables the brute-force path entirely.
+    """
+    if not stops:
+        return Tour(ordered_stops=[], total_distance_meters=0.0, optimal=True)
+
+    threshold = (
+        options.resolved_tsp_threshold()
+        if options is not None
+        else DEFAULT_TSP_BRUTE_FORCE_MAX_STOPS
+    )
+
+    n = len(stops)
+
+    if threshold > 0 and n <= threshold:
+        result = _brute_force_with_start(stops, shipper_node, cost_matrix)
+        if result:
+            best_stops, best_dist = result
+            return Tour(
+                ordered_stops=best_stops,
+                total_distance_meters=best_dist,
+                optimal=True,
+            )
+
+    nn_result = _nearest_neighbor_heuristic(stops, cost_matrix, shipper_node)
+    if nn_result is None:
+        return _infeasible_tour()
+
+    improved = two_opt_improve(
+        nn_result,
+        lambda candidate: _tour_distance(candidate, cost_matrix),
+        _check_precedence,
+    )
+
+    total = _tour_distance_from_shipper(shipper_node, improved, cost_matrix)
+    if total == float("inf"):
+        return _infeasible_tour()
+
+    return Tour(
+        ordered_stops=improved,
+        total_distance_meters=total,
+        optimal=False,
+    )
 
 
-def test_version_change_does_not_reuse_old_cache_entry(tmp_path):
-    path_v1 = _write_versioned_graph(tmp_path, "cache-v1")
-    rt1 = build_graph_runtime(path_v1)
-    find_cached_or_compute_graph_path(rt1, (10.5, 106.5), (10.51, 106.51))
-    assert rt1.route_cache.size == 1
+def _brute_force_with_start(
+    stops: list[Stop],
+    start_node: str,
+    cost_matrix: DistanceProvider,
+) -> tuple[list[Stop], float] | None:
+    """Brute-force with fixed start node."""
+    best_stops = None
+    best_dist = float("inf")
 
-    path_v2 = _write_versioned_graph(tmp_path, "cache-v2")
-    rt2 = build_graph_runtime(path_v2)
-    assert rt2.route_cache.size == 0
-    result = find_cached_or_compute_graph_path(rt2, (10.5, 106.5), (10.51, 106.51))
-    assert result.from_cache is False
-    dijkstra = bidirectional_dijkstra(rt2.adjacency, "a", "b")
-    assert result.graph_path.node_ids == dijkstra.node_ids
+    for perm in permutations(stops):
+        if not _check_precedence(list(perm)):
+            continue
+
+        total = 0.0
+        current = start_node
+        valid = True
+        for stop in perm:
+            dist = cost_matrix.get_distance(current, stop.node_id)
+            if dist is None or dist == float("inf"):
+                valid = False
+                break
+            total += dist
+            current = stop.node_id
+
+        if valid and total < best_dist:
+            best_dist = total
+            best_stops = list(perm)
+
+    if best_stops is None:
+        return None
+    return best_stops, best_dist
+</file>
+
+<file path="backend/app/infrastructure/graph_loader.py">
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+from app.domain.graph_types import (
+    GraphBBox,
+    GraphEdge,
+    GraphMetadata,
+    GraphNode,
+    ValidatedGraph,
+)
+
+DEFAULT_GRAPH_PATH = Path(__file__).resolve().parents[1] / "data" / "road_graph.hcm-v2-uw.json"
+
+BBOX_FIELDS = (
+    "min_latitude",
+    "min_longitude",
+    "max_latitude",
+    "max_longitude",
+)
+
+
+class GraphValidationError(ValueError):
+    """Raised when graph JSON does not satisfy SPEC section 9 rules."""
+
+def load_graph_data(path: Path | str = DEFAULT_GRAPH_PATH) -> ValidatedGraph:
+    graph_path = Path(path)
+    if not graph_path.is_file():
+        raise GraphValidationError(f"Graph file not found: {graph_path}")
+
+    try:
+        raw = json.loads(graph_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise GraphValidationError(f"Graph JSON is malformed: {graph_path}") from exc
+
+    return validate_graph_data(raw)
+
+
+def validate_graph_data(data: Any) -> ValidatedGraph:
+    if not isinstance(data, dict):
+        raise GraphValidationError("Graph root must be an object")
+
+    metadata = _validate_metadata(data.get("metadata"))
+    nodes = _validate_nodes(data.get("nodes"), metadata.bbox)
+    edges = _validate_edges(data.get("edges"), nodes)
+
+    return ValidatedGraph(metadata=metadata, nodes=nodes, edges=edges)
+
+
+def _validate_metadata(metadata: Any) -> GraphMetadata:
+    if not isinstance(metadata, dict):
+        raise GraphValidationError("metadata is required")
+
+    graph_version = metadata.get("graph_version")
+    if not isinstance(graph_version, str) or not graph_version.strip():
+        raise GraphValidationError("metadata.graph_version must be a non-empty string")
+
+    bbox_values = _validate_bbox(metadata.get("bbox"))
+    _validate_bbox_ranges(bbox_values)
+
+    # Required graph metadata for /health and /graph/bounds; not enforced at snap time.
+    max_snap_distance = metadata.get("max_snap_distance_meters")
+    if not isinstance(max_snap_distance, (int, float)) or float(max_snap_distance) <= 0:
+        raise GraphValidationError("metadata.max_snap_distance_meters must be > 0")
+
+    return GraphMetadata(
+        graph_version=graph_version.strip(),
+        bbox=GraphBBox(**bbox_values),
+        max_snap_distance_meters=float(max_snap_distance),
+    )
+
+
+def _validate_bbox(bbox_raw: Any) -> dict[str, float]:
+    if not isinstance(bbox_raw, dict):
+        raise GraphValidationError("metadata.bbox is required")
+
+    bbox_values: dict[str, float] = {}
+    for field in BBOX_FIELDS:
+        value = bbox_raw.get(field)
+        if not isinstance(value, (int, float)):
+            raise GraphValidationError(f"metadata.bbox.{field} must be numeric")
+        bbox_values[field] = float(value)
+    return bbox_values
+
+
+def _validate_bbox_ranges(bbox_values: dict[str, float]) -> None:
+    min_lat = bbox_values["min_latitude"]
+    max_lat = bbox_values["max_latitude"]
+    min_lon = bbox_values["min_longitude"]
+    max_lon = bbox_values["max_longitude"]
+
+    if not (-90 <= min_lat <= 90 and -90 <= max_lat <= 90):
+        raise GraphValidationError("metadata.bbox latitude values must be between -90 and 90")
+    if not (-180 <= min_lon <= 180 and -180 <= max_lon <= 180):
+        raise GraphValidationError("metadata.bbox longitude values must be between -180 and 180")
+    if min_lat > max_lat or min_lon > max_lon:
+        raise GraphValidationError("metadata.bbox is inverted or malformed")
+
+
+def _validate_nodes(nodes: Any, bbox: GraphBBox) -> dict[str, GraphNode]:
+    if not isinstance(nodes, dict) or not nodes:
+        raise GraphValidationError("nodes must be a non-empty object keyed by node ID")
+
+    validated: dict[str, GraphNode] = {}
+    for node_id, node in nodes.items():
+        validated[node_id] = _validate_single_node(node_id, node, bbox, validated)
+
+    return validated
+
+
+def _validate_single_node(
+    node_id: str,
+    node: Any,
+    bbox: GraphBBox,
+    validated: dict[str, GraphNode],
+) -> GraphNode:
+    """Validate one node entry; raises on any structural violation."""
+    _validate_node_id(node_id, validated)
+    if not isinstance(node, dict):
+        raise GraphValidationError(f"node {node_id} must be an object")
+
+    latitude = node.get("latitude")
+    longitude = node.get("longitude")
+    if not isinstance(latitude, (int, float)) or not isinstance(longitude, (int, float)):
+        raise GraphValidationError(f"node {node_id} must include numeric latitude and longitude")
+
+    lat = float(latitude)
+    lon = float(longitude)
+    _validate_node_coordinates(node_id, lat, lon, bbox)
+    return GraphNode(latitude=lat, longitude=lon)
+
+
+def _validate_node_id(node_id: str, validated: dict[str, GraphNode]) -> None:
+    """Validate the node ID itself (non-empty string, not duplicate)."""
+    if not isinstance(node_id, str) or not node_id:
+        raise GraphValidationError("node IDs must be non-empty strings")
+    if node_id in validated:
+        raise GraphValidationError(f"duplicate node ID: {node_id}")
+
+
+def _validate_node_coordinates(
+    node_id: str, lat: float, lon: float, bbox: GraphBBox
+) -> None:
+    """Validate that a node's coordinates are in range and inside the bbox."""
+    if not -90 <= lat <= 90:
+        raise GraphValidationError(f"node {node_id} latitude is invalid")
+    if not -180 <= lon <= 180:
+        raise GraphValidationError(f"node {node_id} longitude is invalid")
+    if not _point_inside_bbox(lat, lon, bbox):
+        raise GraphValidationError(f"node {node_id} is outside metadata bbox")
+
+
+def _validate_edges(edges: Any, nodes: dict[str, GraphNode]) -> list[GraphEdge]:
+    if not isinstance(edges, list):
+        raise GraphValidationError("edges must be an array")
+
+    return [
+        _validate_single_edge(index, edge, nodes)
+        for index, edge in enumerate(edges)
+    ]
+
+
+def _validate_single_edge(
+    index: int,
+    edge: Any,
+    nodes: dict[str, GraphNode],
+) -> GraphEdge:
+    if not isinstance(edge, dict):
+        raise GraphValidationError(f"edge at index {index} must be an object")
+
+    from_node = edge.get("from")
+    to_node = edge.get("to")
+    distance = edge.get("distance")
+
+    _validate_edge_endpoint(index, "from", from_node, nodes)
+    _validate_edge_endpoint(index, "to", to_node, nodes)
+    _validate_edge_distance(index, distance)
+
+    return GraphEdge(
+        from_node=from_node,
+        to_node=to_node,
+        distance=float(distance),
+        oneway=bool(edge.get("oneway", False)),
+        road_type=str(edge.get("road_type", "default")),
+    )
+
+
+def _validate_edge_endpoint(
+    index: int,
+    field: str,
+    node_id: Any,
+    nodes: dict[str, GraphNode],
+) -> None:
+    if not isinstance(node_id, str) or not node_id:
+        raise GraphValidationError(f"edge at index {index} must include {field}")
+    if node_id not in nodes:
+        raise GraphValidationError(f"edge at index {index} references missing node")
+
+
+def _validate_edge_distance(index: int, distance: Any) -> None:
+    if not isinstance(distance, (int, float)) or float(distance) <= 0:
+        raise GraphValidationError(f"edge at index {index} distance must be > 0")
+
+
+def _point_inside_bbox(latitude: float, longitude: float, bbox: GraphBBox) -> bool:
+    return (
+        bbox.min_latitude <= latitude <= bbox.max_latitude
+        and bbox.min_longitude <= longitude <= bbox.max_longitude
+    )
+</file>
+
+<file path="frontend/src/components/PointList.jsx">
+import React from "react";
+import PropTypes from "prop-types";
+import {
+  getDropoffGlyph,
+  getOrderColor,
+  getOrderLabel,
+  getPickupGlyph,
+} from "../utils/orders";
+import { getShipperGlyph, getShipperLabel } from "../utils/shippers";
+import {
+  CoordPropType,
+  OrderPropType,
+  ShipperColorMapPropType,
+  ShipperPropType,
+} from "./proptypes";
+
+function CoordDisplay({ point }) {
+  if (!point) return null;
+  return (
+    <div className="point-coords">
+      {point.latitude.toFixed(6)}, {point.longitude.toFixed(6)}
+    </div>
+  );
+}
+
+CoordDisplay.propTypes = {
+  point: CoordPropType,
+};
+
+export default function PointList({
+  orders,
+  shippers,
+  shipperColorMap,
+  selectedOrderIds,
+  onRemoveOrder,
+  onRemoveShipper,
+}) {
+  const hasContent = orders.length > 0 || shippers.length > 0;
+
+  return (
+    <div className="panel-card">
+      <h2>Điểm đã chọn</h2>
+
+      {!hasContent && <p className="empty-text">Chưa có điểm nào.</p>}
+
+      {shippers.length > 0 && (
+        <>
+          <h3>Shipper ({shippers.length})</h3>
+          {shippers.map((s) => (
+            <div key={s.id} className="point-section">
+              <div>
+                <strong style={{ color: shipperColorMap?.[s.id] ?? "#333" }}>
+                  {getShipperLabel(s.id)}
+                </strong>
+                <span className="order-flow-label"> ({getShipperGlyph(s.id)})</span>
+                <CoordDisplay point={s.location} />
+              </div>
+              <button
+                className="icon-button"
+                onClick={() => onRemoveShipper(s.id)}
+                type="button"
+              >
+                Xóa
+              </button>
+            </div>
+          ))}
+        </>
+      )}
+
+      {orders.length > 0 && (
+        <>
+          <h3>Đơn hàng ({orders.length})</h3>
+          {orders.map((o) => {
+            const color = getOrderColor(o.id, orders);
+            const label = getOrderLabel(o.id);
+            const assigned = selectedOrderIds.includes(o.id);
+            return (
+              <div
+                key={o.id}
+                className={`point-section order-point-section${assigned ? " assigned" : ""}`}
+                style={{ borderLeftColor: color }}
+              >
+                <div>
+                  <strong style={{ color }}>{label}</strong>
+                  <div className="order-flow-label">
+                    {getPickupGlyph(o.id)} → {getDropoffGlyph(o.id)}
+                    {assigned ? " · đã chọn cho shipper" : ""}
+                  </div>
+                  <div className="point-coords">
+                    <span
+                      className="stop-badge order-stop"
+                      style={{ background: `${color}22`, color, borderColor: color }}
+                    >
+                      {getPickupGlyph(o.id)}
+                    </span>{" "}
+                    {o.pickup.latitude.toFixed(6)}, {o.pickup.longitude.toFixed(6)}
+                  </div>
+                  <div className="point-coords">
+                    <span
+                      className="stop-badge order-stop"
+                      style={{ background: `${color}22`, color, borderColor: color }}
+                    >
+                      {getDropoffGlyph(o.id)}
+                    </span>{" "}
+                    {o.dropoff.latitude.toFixed(6)}, {o.dropoff.longitude.toFixed(6)}
+                  </div>
+                </div>
+                <button
+                  className="icon-button"
+                  onClick={() => onRemoveOrder(o.id)}
+                  type="button"
+                >
+                  Xóa
+                </button>
+              </div>
+            );
+          })}
+        </>
+      )}
+    </div>
+  );
+}
+
+PointList.propTypes = {
+  orders: PropTypes.arrayOf(OrderPropType).isRequired,
+  shippers: PropTypes.arrayOf(ShipperPropType).isRequired,
+  shipperColorMap: ShipperColorMapPropType,
+  selectedOrderIds: PropTypes.arrayOf(PropTypes.string).isRequired,
+  onRemoveOrder: PropTypes.func.isRequired,
+  onRemoveShipper: PropTypes.func.isRequired,
+};
 </file>
 
 <file path="frontend/src/App.css">
@@ -4850,11 +6613,52 @@ button, input, textarea, select {
   padding: 1.25rem 1.5rem;
 }
 
+.app-header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
 .app-header h1 {
   margin: 0;
   font-size: 1.5rem;
   font-weight: 600;
   letter-spacing: -0.02em;
+}
+
+.auth-panel {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.auth-panel--signed-in .auth-user {
+  font-size: 0.875rem;
+  color: var(--color-sky-tint);
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.auth-button {
+  padding: 0.4rem 0.75rem;
+  font-size: 0.8125rem;
+}
+
+.auth-error {
+  margin: 0;
+  font-size: 0.75rem;
+}
+
+.auth-callback {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 2rem;
 }
 
 .app-header p {
@@ -4875,6 +6679,71 @@ button, input, textarea, select {
 
 .map-panel, .side-panel {
   min-height: 70vh;
+}
+
+.map-panel {
+  position: relative;
+}
+
+.map-auth-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  background: rgba(2, 9, 58, 0.55);
+  color: var(--color-pure-white);
+  text-align: center;
+  pointer-events: none;
+  z-index: 500;
+}
+
+.auth-gate-card {
+  border: 1px solid var(--color-faint-line);
+}
+
+.scenario-panel .scenario-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.scenario-panel input {
+  border: 1px solid var(--color-faint-line);
+  border-radius: var(--radius);
+  padding: 0.5rem 0.625rem;
+  min-width: 0;
+}
+
+.scenario-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.scenario-list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.link-button {
+  border: none;
+  background: transparent;
+  color: var(--color-signal-blue);
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+  font-weight: 500;
+}
+
+.link-button:hover {
+  text-decoration: underline;
 }
 
 /* Map */
@@ -5332,483 +7201,6 @@ button, input, textarea, select {
     min-height: 50vh;
   }
 }
-</file>
-
-<file path="frontend/package.json">
-{
-  "name": "road-finder-frontend",
-  "private": true,
-  "version": "0.0.1",
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
-  },
-  "dependencies": {
-    "@tanstack/react-query": "^5.59.16",
-    "leaflet": "^1.9.4",
-    "prop-types": "^15.8.1",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "react-leaflet": "^4.2.1"
-  },
-  "devDependencies": {
-    "@vitejs/plugin-react": "^4.3.3",
-    "vite": "^5.4.8"
-  }
-}
-</file>
-
-<file path="backend/tests/unit/test_route_reconstruction.py">
-from pathlib import Path
-
-import pytest
-
-from app.application.graph_runtime import build_graph_runtime
-from app.application.node_lookup import GraphNodeLookup
-from app.domain.dijkstra import bidirectional_dijkstra
-from app.domain.route_reconstruction import (
-    RouteCoordinate,
-    compute_total_distance_meters,
-    dedupe_adjacent_exact_coordinates,
-    reconstruct_route_points,
-)
-from app.application.snap_service import snap_point
-
-FIXTURE_GRAPH_PATH = (
-    Path(__file__).resolve().parents[2] / "app" / "data" / "road_graph.json"
-)
-
-
-@pytest.fixture
-def runtime():
-    return build_graph_runtime(FIXTURE_GRAPH_PATH)
-
-
-def _coord(lat: float, lon: float) -> RouteCoordinate:
-    return RouteCoordinate(latitude=lat, longitude=lon)
-
-
-def test_route_points_begin_with_clicked_start_and_end_with_clicked_end(runtime):
-    start = (10.7785, 106.7149)
-    end = (10.7808, 106.7172)
-    start_snap = snap_point(runtime, start[0], start[1])
-    end_snap = snap_point(runtime, end[0], end[1])
-    dijkstra = bidirectional_dijkstra(
-        runtime.adjacency, start_snap.node_id, end_snap.node_id
-    )
-    route = reconstruct_route_points(
-        GraphNodeLookup(runtime.nodes),
-        clicked_start=start,
-        clicked_end=end,
-        dijkstra_node_ids=dijkstra.node_ids,
-    )
-    assert route[0].latitude == pytest.approx(start[0])
-    assert route[0].longitude == pytest.approx(start[1])
-    assert route[-1].latitude == pytest.approx(end[0])
-    assert route[-1].longitude == pytest.approx(end[1])
-
-
-def test_intermediate_points_follow_dijkstra_node_order(runtime):
-    start = (10.7785, 106.7149)
-    end = (10.7808, 106.7172)
-    start_snap = snap_point(runtime, start[0], start[1])
-    end_snap = snap_point(runtime, end[0], end[1])
-    dijkstra = bidirectional_dijkstra(
-        runtime.adjacency, start_snap.node_id, end_snap.node_id
-    )
-    route = reconstruct_route_points(
-        GraphNodeLookup(runtime.nodes),
-        clicked_start=start,
-        clicked_end=end,
-        dijkstra_node_ids=dijkstra.node_ids,
-    )
-    mid = runtime.nodes["node-mid"]
-    assert any(
-        p.latitude == pytest.approx(mid.latitude)
-        and p.longitude == pytest.approx(mid.longitude)
-        for p in route[1:-1]
-    )
-    assert dijkstra.node_ids == ["node-start", "node-mid", "node-end"]
-
-
-def test_exact_endpoint_on_node_dedupes_adjacent_duplicate(runtime):
-    node = runtime.nodes["node-start"]
-    start = (node.latitude, node.longitude)
-    end = (10.7808, 106.7172)
-    start_snap = snap_point(runtime, start[0], start[1])
-    end_snap = snap_point(runtime, end[0], end[1])
-    dijkstra = bidirectional_dijkstra(
-        runtime.adjacency, start_snap.node_id, end_snap.node_id
-    )
-    route = reconstruct_route_points(
-        GraphNodeLookup(runtime.nodes),
-        clicked_start=start,
-        clicked_end=end,
-        dijkstra_node_ids=dijkstra.node_ids,
-    )
-    assert route[0].latitude == pytest.approx(start[0])
-    assert not _has_adjacent_duplicate(route)
-
-
-def test_non_identical_snap_segment_preserved_when_offset_from_node(runtime):
-    start = (10.7785, 106.7149)
-    end = (10.7808, 106.7172)
-    start_snap = snap_point(runtime, start[0], start[1])
-    end_snap = snap_point(runtime, end[0], end[1])
-    assert start_snap.distance_meters > 0.0
-    dijkstra = bidirectional_dijkstra(
-        runtime.adjacency, start_snap.node_id, end_snap.node_id
-    )
-    route = reconstruct_route_points(
-        GraphNodeLookup(runtime.nodes),
-        clicked_start=start,
-        clicked_end=end,
-        dijkstra_node_ids=dijkstra.node_ids,
-    )
-    assert len(route) >= 3
-    assert route[0].latitude == pytest.approx(start[0])
-
-
-def test_distance_matches_independent_fixture_calculation(runtime):
-    start = (10.7785, 106.7149)
-    end = (10.7808, 106.7172)
-    start_snap = snap_point(runtime, start[0], start[1])
-    end_snap = snap_point(runtime, end[0], end[1])
-    dijkstra = bidirectional_dijkstra(
-        runtime.adjacency, start_snap.node_id, end_snap.node_id
-    )
-    distance = compute_total_distance_meters(
-        start_snap_distance_meters=start_snap.distance_meters,
-        end_snap_distance_meters=end_snap.distance_meters,
-        graph_distance_meters=dijkstra.graph_distance_meters,
-    )
-    expected = (
-        start_snap.distance_meters
-        + dijkstra.graph_distance_meters
-        + end_snap.distance_meters
-    )
-    assert distance == pytest.approx(expected, rel=1e-9, abs=1e-6)
-
-
-def test_same_snapped_node_returns_snap_only_route(runtime):
-    lat, lon = 10.77925, 106.71555
-    start = (lat, lon)
-    end = (lat + 0.00005, lon + 0.00005)
-    start_snap = snap_point(runtime, start[0], start[1])
-    end_snap = snap_point(runtime, end[0], end[1])
-    assert start_snap.node_id == end_snap.node_id == "node-mid"
-    dijkstra = bidirectional_dijkstra(
-        runtime.adjacency, start_snap.node_id, end_snap.node_id
-    )
-    assert dijkstra.node_ids == ["node-mid"]
-    assert dijkstra.graph_distance_meters == pytest.approx(0.0)
-    route = reconstruct_route_points(
-        GraphNodeLookup(runtime.nodes),
-        clicked_start=start,
-        clicked_end=end,
-        dijkstra_node_ids=dijkstra.node_ids,
-    )
-    assert route[0].latitude == pytest.approx(start[0])
-    assert route[-1].latitude == pytest.approx(end[0])
-    distance = compute_total_distance_meters(
-        start_snap.distance_meters,
-        end_snap.distance_meters,
-        dijkstra.graph_distance_meters,
-    )
-    assert distance == pytest.approx(
-        start_snap.distance_meters + end_snap.distance_meters, rel=1e-9
-    )
-    for _ in range(10):
-        again = reconstruct_route_points(
-            GraphNodeLookup(runtime.nodes),
-            clicked_start=start,
-            clicked_end=end,
-            dijkstra_node_ids=dijkstra.node_ids,
-        )
-        assert [(p.latitude, p.longitude) for p in again] == [
-            (p.latitude, p.longitude) for p in route
-        ]
-
-
-def test_dedupe_adjacent_exact_coordinates_only():
-    raw = [
-        _coord(1.0, 1.0),
-        _coord(1.0, 1.0),
-        _coord(2.0, 2.0),
-        _coord(3.0, 3.0),
-        _coord(3.0, 3.0),
-    ]
-    deduped = dedupe_adjacent_exact_coordinates(raw)
-    assert len(deduped) == 3
-    assert deduped[0].latitude == pytest.approx(1.0)
-    assert deduped[1].latitude == pytest.approx(2.0)
-    assert deduped[2].latitude == pytest.approx(3.0)
-
-
-def _has_adjacent_duplicate(route: list[RouteCoordinate]) -> bool:
-    for i in range(1, len(route)):
-        a, b = route[i - 1], route[i]
-        if (
-            abs(a.latitude - b.latitude) <= 1e-9
-            and abs(a.longitude - b.longitude) <= 1e-9
-        ):
-            return True
-    return False
-</file>
-
-<file path="backend/app/domain/tsp.py">
-from __future__ import annotations
-
-from dataclasses import dataclass
-from itertools import permutations
-
-from app.domain.cost_model import DEFAULT_TSP_BRUTE_FORCE_MAX_STOPS, RoutingOptions
-from app.domain.protocols import DistanceProvider
-from app.domain.two_opt import two_opt_improve
-
-
-@dataclass(frozen=True)
-class Stop:
-    order_id: str
-    kind: str  # "pickup" or "dropoff"
-    node_id: str
-
-
-@dataclass(frozen=True)
-class Tour:
-    ordered_stops: list[Stop]
-    total_distance_meters: float
-    optimal: bool
-    feasible: bool = True
-
-
-def _check_precedence(stops: list[Stop]) -> bool:
-    """Check that for each order, pickup appears before dropoff."""
-    seen: dict[str, str] = {}  # order_id -> first kind seen
-    for stop in stops:
-        if stop.order_id not in seen:
-            seen[stop.order_id] = stop.kind
-        elif stop.kind == "pickup" and seen[stop.order_id] == "dropoff":
-            return False
-    return True
-
-
-def _tour_distance(stops: list[Stop], cost_matrix: DistanceProvider) -> float:
-    """Compute total distance for a sequence of stops."""
-    if len(stops) < 2:
-        return 0.0
-
-    total = 0.0
-    for i in range(len(stops) - 1):
-        dist = cost_matrix.get_distance(stops[i].node_id, stops[i + 1].node_id)
-        if dist is None or dist == float("inf"):
-            return float("inf")
-        total += dist
-    return total
-
-
-def _tour_distance_from_shipper(
-    shipper_node: str,
-    stops: list[Stop],
-    cost_matrix: DistanceProvider,
-) -> float:
-    if not stops:
-        return 0.0
-    total = 0.0
-    current = shipper_node
-    for stop in stops:
-        dist = cost_matrix.get_distance(current, stop.node_id)
-        if dist is None or dist == float("inf"):
-            return float("inf")
-        total += dist
-        current = stop.node_id
-    return total
-
-
-def _infeasible_tour() -> Tour:
-    return Tour(
-        ordered_stops=[],
-        total_distance_meters=0.0,
-        optimal=False,
-        feasible=False,
-    )
-
-
-def _is_dropoff_eligible(
-    stop: Stop,
-    visited_orders: dict[str, set[str]],
-    remaining: list[Stop],
-) -> bool:
-    """Check if a dropoff stop can be visited (pickup already done or no pickup left)."""
-    if stop.kind != "dropoff":
-        return True
-    visited = visited_orders.get(stop.order_id, set())
-    if "pickup" in visited:
-        return True
-    has_pickup_remaining = any(
-        s.order_id == stop.order_id and s.kind == "pickup" for s in remaining
-    )
-    return not has_pickup_remaining
-
-
-def _find_nearest_valid_stop(
-    remaining: list[Stop],
-    current_node: str,
-    visited_orders: dict[str, set[str]],
-    cost_matrix: DistanceProvider,
-) -> int:
-    """Find the index of the nearest valid stop; -1 if none."""
-    best_idx = -1
-    best_dist = float("inf")
-
-    for i, stop in enumerate(remaining):
-        if not _is_dropoff_eligible(stop, visited_orders, remaining):
-            continue
-        dist = cost_matrix.get_distance(current_node, stop.node_id)
-        if dist is not None and dist < best_dist:
-            best_dist = dist
-            best_idx = i
-
-    return best_idx
-
-
-def _nearest_neighbor_heuristic(
-    stops: list[Stop],
-    cost_matrix: DistanceProvider,
-    start_node: str | None = None,
-) -> list[Stop] | None:
-    """Nearest-neighbor heuristic respecting precedence constraints."""
-    if not stops:
-        return []
-
-    remaining = list(stops)
-    result: list[Stop] = []
-    visited_orders: dict[str, set[str]] = {}
-
-    current_node = _initialize_start(
-        remaining, result, visited_orders, start_node
-    )
-
-    while remaining:
-        best_idx = _find_nearest_valid_stop(
-            remaining, current_node, visited_orders, cost_matrix
-        )
-        if best_idx < 0:
-            return None
-
-        chosen = remaining.pop(best_idx)
-        result.append(chosen)
-        visited_orders.setdefault(chosen.order_id, set()).add(chosen.kind)
-        current_node = chosen.node_id
-
-    return result
-
-
-def _initialize_start(
-    remaining: list[Stop],
-    result: list[Stop],
-    visited_orders: dict[str, set[str]],
-    start_node: str | None,
-) -> str:
-    """Set up the starting point for nearest-neighbor; return current node."""
-    if start_node:
-        return start_node
-    first = remaining.pop(0)
-    result.append(first)
-    visited_orders.setdefault(first.order_id, set()).add(first.kind)
-    return first.node_id
-
-
-def optimize_tour(
-    shipper_node: str,
-    stops: list[Stop],
-    cost_matrix: DistanceProvider,
-    *,
-    options: RoutingOptions | None = None,
-) -> Tour:
-    """Optimize a tour for a single shipper visiting multiple stops.
-
-    For n ≤ threshold: brute-force optimal.
-    For n > threshold: nearest-neighbor + 2-opt heuristic.
-
-    Threshold comes from `options.tsp_brute_force_max_stops` or the module default.
-    A threshold of 0 disables the brute-force path entirely.
-    """
-    if not stops:
-        return Tour(ordered_stops=[], total_distance_meters=0.0, optimal=True)
-
-    threshold = (
-        options.resolved_tsp_threshold()
-        if options is not None
-        else DEFAULT_TSP_BRUTE_FORCE_MAX_STOPS
-    )
-
-    n = len(stops)
-
-    if threshold > 0 and n <= threshold:
-        result = _brute_force_with_start(stops, shipper_node, cost_matrix)
-        if result:
-            best_stops, best_dist = result
-            return Tour(
-                ordered_stops=best_stops,
-                total_distance_meters=best_dist,
-                optimal=True,
-            )
-
-    nn_result = _nearest_neighbor_heuristic(stops, cost_matrix, shipper_node)
-    if nn_result is None:
-        return _infeasible_tour()
-
-    improved = two_opt_improve(
-        nn_result,
-        lambda candidate: _tour_distance(candidate, cost_matrix),
-        _check_precedence,
-    )
-
-    total = _tour_distance_from_shipper(shipper_node, improved, cost_matrix)
-    if total == float("inf"):
-        return _infeasible_tour()
-
-    return Tour(
-        ordered_stops=improved,
-        total_distance_meters=total,
-        optimal=False,
-    )
-
-
-def _brute_force_with_start(
-    stops: list[Stop],
-    start_node: str,
-    cost_matrix: DistanceProvider,
-) -> tuple[list[Stop], float] | None:
-    """Brute-force with fixed start node."""
-    best_stops = None
-    best_dist = float("inf")
-
-    for perm in permutations(stops):
-        if not _check_precedence(list(perm)):
-            continue
-
-        total = 0.0
-        current = start_node
-        valid = True
-        for stop in perm:
-            dist = cost_matrix.get_distance(current, stop.node_id)
-            if dist is None or dist == float("inf"):
-                valid = False
-                break
-            total += dist
-            current = stop.node_id
-
-        if valid and total < best_dist:
-            best_dist = total
-            best_stops = list(perm)
-
-    if best_stops is None:
-        return None
-    return best_stops, best_dist
 </file>
 
 <file path="backend/app/domain/vrp.py">
@@ -6434,418 +7826,6 @@ def _brute_force_vrp(
     return best_plan
 </file>
 
-<file path="backend/app/infrastructure/graph_loader.py">
-from __future__ import annotations
-
-import json
-from pathlib import Path
-from typing import Any
-
-from app.domain.graph_types import (
-    GraphBBox,
-    GraphEdge,
-    GraphMetadata,
-    GraphNode,
-    ValidatedGraph,
-)
-
-DEFAULT_GRAPH_PATH = Path(__file__).resolve().parents[1] / "data" / "road_graph.hcm-v2-uw.json"
-
-BBOX_FIELDS = (
-    "min_latitude",
-    "min_longitude",
-    "max_latitude",
-    "max_longitude",
-)
-
-
-class GraphValidationError(ValueError):
-    """Raised when graph JSON does not satisfy SPEC section 9 rules."""
-
-def load_graph_data(path: Path | str = DEFAULT_GRAPH_PATH) -> ValidatedGraph:
-    graph_path = Path(path)
-    if not graph_path.is_file():
-        raise GraphValidationError(f"Graph file not found: {graph_path}")
-
-    try:
-        raw = json.loads(graph_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise GraphValidationError(f"Graph JSON is malformed: {graph_path}") from exc
-
-    return validate_graph_data(raw)
-
-
-def validate_graph_data(data: Any) -> ValidatedGraph:
-    if not isinstance(data, dict):
-        raise GraphValidationError("Graph root must be an object")
-
-    metadata = _validate_metadata(data.get("metadata"))
-    nodes = _validate_nodes(data.get("nodes"), metadata.bbox)
-    edges = _validate_edges(data.get("edges"), nodes)
-
-    return ValidatedGraph(metadata=metadata, nodes=nodes, edges=edges)
-
-
-def _validate_metadata(metadata: Any) -> GraphMetadata:
-    if not isinstance(metadata, dict):
-        raise GraphValidationError("metadata is required")
-
-    graph_version = metadata.get("graph_version")
-    if not isinstance(graph_version, str) or not graph_version.strip():
-        raise GraphValidationError("metadata.graph_version must be a non-empty string")
-
-    bbox_values = _validate_bbox(metadata.get("bbox"))
-    _validate_bbox_ranges(bbox_values)
-
-    # Required graph metadata for /health and /graph/bounds; not enforced at snap time.
-    max_snap_distance = metadata.get("max_snap_distance_meters")
-    if not isinstance(max_snap_distance, (int, float)) or float(max_snap_distance) <= 0:
-        raise GraphValidationError("metadata.max_snap_distance_meters must be > 0")
-
-    return GraphMetadata(
-        graph_version=graph_version.strip(),
-        bbox=GraphBBox(**bbox_values),
-        max_snap_distance_meters=float(max_snap_distance),
-    )
-
-
-def _validate_bbox(bbox_raw: Any) -> dict[str, float]:
-    if not isinstance(bbox_raw, dict):
-        raise GraphValidationError("metadata.bbox is required")
-
-    bbox_values: dict[str, float] = {}
-    for field in BBOX_FIELDS:
-        value = bbox_raw.get(field)
-        if not isinstance(value, (int, float)):
-            raise GraphValidationError(f"metadata.bbox.{field} must be numeric")
-        bbox_values[field] = float(value)
-    return bbox_values
-
-
-def _validate_bbox_ranges(bbox_values: dict[str, float]) -> None:
-    min_lat = bbox_values["min_latitude"]
-    max_lat = bbox_values["max_latitude"]
-    min_lon = bbox_values["min_longitude"]
-    max_lon = bbox_values["max_longitude"]
-
-    if not (-90 <= min_lat <= 90 and -90 <= max_lat <= 90):
-        raise GraphValidationError("metadata.bbox latitude values must be between -90 and 90")
-    if not (-180 <= min_lon <= 180 and -180 <= max_lon <= 180):
-        raise GraphValidationError("metadata.bbox longitude values must be between -180 and 180")
-    if min_lat > max_lat or min_lon > max_lon:
-        raise GraphValidationError("metadata.bbox is inverted or malformed")
-
-
-def _validate_nodes(nodes: Any, bbox: GraphBBox) -> dict[str, GraphNode]:
-    if not isinstance(nodes, dict) or not nodes:
-        raise GraphValidationError("nodes must be a non-empty object keyed by node ID")
-
-    validated: dict[str, GraphNode] = {}
-    for node_id, node in nodes.items():
-        validated[node_id] = _validate_single_node(node_id, node, bbox, validated)
-
-    return validated
-
-
-def _validate_single_node(
-    node_id: str,
-    node: Any,
-    bbox: GraphBBox,
-    validated: dict[str, GraphNode],
-) -> GraphNode:
-    """Validate one node entry; raises on any structural violation."""
-    _validate_node_id(node_id, validated)
-    if not isinstance(node, dict):
-        raise GraphValidationError(f"node {node_id} must be an object")
-
-    latitude = node.get("latitude")
-    longitude = node.get("longitude")
-    if not isinstance(latitude, (int, float)) or not isinstance(longitude, (int, float)):
-        raise GraphValidationError(f"node {node_id} must include numeric latitude and longitude")
-
-    lat = float(latitude)
-    lon = float(longitude)
-    _validate_node_coordinates(node_id, lat, lon, bbox)
-    return GraphNode(latitude=lat, longitude=lon)
-
-
-def _validate_node_id(node_id: str, validated: dict[str, GraphNode]) -> None:
-    """Validate the node ID itself (non-empty string, not duplicate)."""
-    if not isinstance(node_id, str) or not node_id:
-        raise GraphValidationError("node IDs must be non-empty strings")
-    if node_id in validated:
-        raise GraphValidationError(f"duplicate node ID: {node_id}")
-
-
-def _validate_node_coordinates(
-    node_id: str, lat: float, lon: float, bbox: GraphBBox
-) -> None:
-    """Validate that a node's coordinates are in range and inside the bbox."""
-    if not -90 <= lat <= 90:
-        raise GraphValidationError(f"node {node_id} latitude is invalid")
-    if not -180 <= lon <= 180:
-        raise GraphValidationError(f"node {node_id} longitude is invalid")
-    if not _point_inside_bbox(lat, lon, bbox):
-        raise GraphValidationError(f"node {node_id} is outside metadata bbox")
-
-
-def _validate_edges(edges: Any, nodes: dict[str, GraphNode]) -> list[GraphEdge]:
-    if not isinstance(edges, list):
-        raise GraphValidationError("edges must be an array")
-
-    return [
-        _validate_single_edge(index, edge, nodes)
-        for index, edge in enumerate(edges)
-    ]
-
-
-def _validate_single_edge(
-    index: int,
-    edge: Any,
-    nodes: dict[str, GraphNode],
-) -> GraphEdge:
-    if not isinstance(edge, dict):
-        raise GraphValidationError(f"edge at index {index} must be an object")
-
-    from_node = edge.get("from")
-    to_node = edge.get("to")
-    distance = edge.get("distance")
-
-    _validate_edge_endpoint(index, "from", from_node, nodes)
-    _validate_edge_endpoint(index, "to", to_node, nodes)
-    _validate_edge_distance(index, distance)
-
-    return GraphEdge(
-        from_node=from_node,
-        to_node=to_node,
-        distance=float(distance),
-        oneway=bool(edge.get("oneway", False)),
-        road_type=str(edge.get("road_type", "default")),
-    )
-
-
-def _validate_edge_endpoint(
-    index: int,
-    field: str,
-    node_id: Any,
-    nodes: dict[str, GraphNode],
-) -> None:
-    if not isinstance(node_id, str) or not node_id:
-        raise GraphValidationError(f"edge at index {index} must include {field}")
-    if node_id not in nodes:
-        raise GraphValidationError(f"edge at index {index} references missing node")
-
-
-def _validate_edge_distance(index: int, distance: Any) -> None:
-    if not isinstance(distance, (int, float)) or float(distance) <= 0:
-        raise GraphValidationError(f"edge at index {index} distance must be > 0")
-
-
-def _point_inside_bbox(latitude: float, longitude: float, bbox: GraphBBox) -> bool:
-    return (
-        bbox.min_latitude <= latitude <= bbox.max_latitude
-        and bbox.min_longitude <= longitude <= bbox.max_longitude
-    )
-</file>
-
-<file path="backend/app/main.py">
-import os
-from contextlib import asynccontextmanager
-from pathlib import Path
-
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-
-from app.application.graph_runtime import build_graph_runtime
-from app.infrastructure.graph_loader import DEFAULT_GRAPH_PATH
-from app.routers.route_api import router as route_router
-
-
-def _graph_path_from_env() -> Path:
-    override = os.environ.get("ROAD_FINDER_GRAPH_PATH")
-    if override:
-        return Path(override)
-    return DEFAULT_GRAPH_PATH
-
-
-@asynccontextmanager
-async def _lifespan(app: FastAPI):
-    app.state.graph_runtime = build_graph_runtime(_graph_path_from_env())
-    yield
-
-
-def create_app() -> FastAPI:
-    app = FastAPI(title="Road Finder API", lifespan=_lifespan)
-
-    cors_origins = os.environ.get(
-        "CORS_ALLOW_ORIGINS",
-        "http://localhost:5173,http://127.0.0.1:5173",
-    ).split(",")
-    cors_origins = [o.strip() for o in cors_origins if o.strip()]
-
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=cors_origins,
-        allow_origin_regex=r"https://.*\.vercel\.app",
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
-    app.include_router(route_router)
-
-    return app
-
-
-app = create_app()
-
-
-# Example:
-#
-# Uvicorn will use this app object to run the backend server.
-#
-# Run command later:
-# uvicorn app.main:app --reload
-#
-# After the server runs, frontend can call:
-# GET /health
-# POST /route
-</file>
-
-<file path="frontend/src/components/PointList.jsx">
-import React from "react";
-import PropTypes from "prop-types";
-import {
-  getDropoffGlyph,
-  getOrderColor,
-  getOrderLabel,
-  getPickupGlyph,
-} from "../utils/orders";
-import { getShipperGlyph, getShipperLabel } from "../utils/shippers";
-import {
-  CoordPropType,
-  OrderPropType,
-  ShipperColorMapPropType,
-  ShipperPropType,
-} from "./proptypes";
-
-function CoordDisplay({ point }) {
-  if (!point) return null;
-  return (
-    <div className="point-coords">
-      {point.latitude.toFixed(6)}, {point.longitude.toFixed(6)}
-    </div>
-  );
-}
-
-CoordDisplay.propTypes = {
-  point: CoordPropType,
-};
-
-export default function PointList({
-  orders,
-  shippers,
-  shipperColorMap,
-  selectedOrderIds,
-  onRemoveOrder,
-  onRemoveShipper,
-}) {
-  const hasContent = orders.length > 0 || shippers.length > 0;
-
-  return (
-    <div className="panel-card">
-      <h2>Điểm đã chọn</h2>
-
-      {!hasContent && <p className="empty-text">Chưa có điểm nào.</p>}
-
-      {shippers.length > 0 && (
-        <>
-          <h3>Shipper ({shippers.length})</h3>
-          {shippers.map((s) => (
-            <div key={s.id} className="point-section">
-              <div>
-                <strong style={{ color: shipperColorMap?.[s.id] ?? "#333" }}>
-                  {getShipperLabel(s.id)}
-                </strong>
-                <span className="order-flow-label"> ({getShipperGlyph(s.id)})</span>
-                <CoordDisplay point={s.location} />
-              </div>
-              <button
-                className="icon-button"
-                onClick={() => onRemoveShipper(s.id)}
-                type="button"
-              >
-                Xóa
-              </button>
-            </div>
-          ))}
-        </>
-      )}
-
-      {orders.length > 0 && (
-        <>
-          <h3>Đơn hàng ({orders.length})</h3>
-          {orders.map((o) => {
-            const color = getOrderColor(o.id, orders);
-            const label = getOrderLabel(o.id);
-            const assigned = selectedOrderIds.includes(o.id);
-            return (
-              <div
-                key={o.id}
-                className={`point-section order-point-section${assigned ? " assigned" : ""}`}
-                style={{ borderLeftColor: color }}
-              >
-                <div>
-                  <strong style={{ color }}>{label}</strong>
-                  <div className="order-flow-label">
-                    {getPickupGlyph(o.id)} → {getDropoffGlyph(o.id)}
-                    {assigned ? " · đã chọn cho shipper" : ""}
-                  </div>
-                  <div className="point-coords">
-                    <span
-                      className="stop-badge order-stop"
-                      style={{ background: `${color}22`, color, borderColor: color }}
-                    >
-                      {getPickupGlyph(o.id)}
-                    </span>{" "}
-                    {o.pickup.latitude.toFixed(6)}, {o.pickup.longitude.toFixed(6)}
-                  </div>
-                  <div className="point-coords">
-                    <span
-                      className="stop-badge order-stop"
-                      style={{ background: `${color}22`, color, borderColor: color }}
-                    >
-                      {getDropoffGlyph(o.id)}
-                    </span>{" "}
-                    {o.dropoff.latitude.toFixed(6)}, {o.dropoff.longitude.toFixed(6)}
-                  </div>
-                </div>
-                <button
-                  className="icon-button"
-                  onClick={() => onRemoveOrder(o.id)}
-                  type="button"
-                >
-                  Xóa
-                </button>
-              </div>
-            );
-          })}
-        </>
-      )}
-    </div>
-  );
-}
-
-PointList.propTypes = {
-  orders: PropTypes.arrayOf(OrderPropType).isRequired,
-  shippers: PropTypes.arrayOf(ShipperPropType).isRequired,
-  shipperColorMap: ShipperColorMapPropType,
-  selectedOrderIds: PropTypes.arrayOf(PropTypes.string).isRequired,
-  onRemoveOrder: PropTypes.func.isRequired,
-  onRemoveShipper: PropTypes.func.isRequired,
-};
-</file>
-
 <file path="backend/app/models/route_models.py">
 from pydantic import BaseModel, Field
 
@@ -6957,385 +7937,70 @@ class FleetResponse(BaseModel):
     optimal: bool
 </file>
 
-<file path="frontend/src/App.jsx">
-import React, { useCallback, useMemo } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
-import MapView from "./components/MapView";
-import ModeSwitcher from "./components/ModeSwitcher";
-import OptionsPanel from "./components/OptionsPanel";
-import ShipperAssignmentPanel from "./components/ShipperAssignmentPanel";
-import TourResultPanel from "./components/TourResultPanel";
-import PointList from "./components/PointList";
-import {
-  ACCEPTED_AREA_DETAIL,
-  getGraphBounds,
-  postTours,
-  API_BASE_URL,
-} from "./api/routeApi";
-import { isInsideBbox } from "./utils/geo";
-import { formatDistance } from "./utils/format";
-import { getOrderLabel } from "./utils/orders";
-import { getShipperGlyph, getShipperLabel } from "./utils/shippers";
-import {
-  PLACEMENT_MODE,
-  VRP_STATUS,
-  useVrpState,
-  getShipperColor,
-} from "./hooks/useVrpState";
+<file path="backend/app/main.py">
+import os
+from contextlib import asynccontextmanager
+from pathlib import Path
 
-export default function App() {
-  const {
-    placementMode,
-    setPlacementMode,
-    orderStep,
-    pendingPickup,
-    orders,
-    shippers,
-    selectedShipperId,
-    selectedOrderIds,
-    tourResult,
-    status,
-    errorMessage,
-    avoidRoadTypes,
-    setAvoidRoadTypes,
-    canOptimize,
-    setPickupForNewOrder,
-    setDropoffForPendingOrder,
-    cancelPendingPickup,
-    addShipper,
-    removeOrder,
-    removeShipper,
-    clearAll,
-    selectShipper,
-    toggleOrderSelection,
-    beginRequest,
-    completeRequest,
-    failRequest,
-  } = useVrpState();
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
-  const boundsQuery = useQuery({
-    queryKey: ["graph-bounds"],
-    queryFn: getGraphBounds,
-    staleTime: Infinity,
-    retry: 1,
-  });
+from app.application.graph_runtime import build_graph_runtime
+from app.infrastructure.graph_loader import DEFAULT_GRAPH_PATH
+from app.routers.auth_api import router as auth_router
+from app.routers.route_api import router as route_router
 
-  const boundsLoaded = boundsQuery.isSuccess && Boolean(boundsQuery.data?.bbox);
-  const bbox = boundsLoaded ? boundsQuery.data.bbox : null;
 
-  const mutation = useMutation({
-    mutationFn: postTours,
-    onMutate: () => {
-      beginRequest();
-    },
-    onSuccess: (data) => {
-      completeRequest(data);
-    },
-    onError: (error) => {
-      failRequest(error?.message || "Có lỗi xảy ra khi tối ưu.");
-    },
-  });
+def _graph_path_from_env() -> Path:
+    override = os.environ.get("ROAD_FINDER_GRAPH_PATH")
+    if override:
+        return Path(override)
+    return DEFAULT_GRAPH_PATH
 
-  const handleMapClick = useCallback(
-    (rawPoint) => {
-      if (!boundsLoaded) return;
-      const candidate = {
-        latitude: rawPoint.lat,
-        longitude: rawPoint.lng,
-      };
-      if (!isInsideBbox(candidate, bbox)) {
-        failRequest(ACCEPTED_AREA_DETAIL);
-        return;
-      }
 
-      if (placementMode === PLACEMENT_MODE.ORDER) {
-        if (pendingPickup) {
-          setDropoffForPendingOrder(candidate);
-        } else {
-          setPickupForNewOrder(candidate);
-        }
-      } else {
-        addShipper(candidate);
-      }
-    },
-    [
-      boundsLoaded,
-      bbox,
-      placementMode,
-      pendingPickup,
-      setPickupForNewOrder,
-      setDropoffForPendingOrder,
-      addShipper,
-      failRequest,
-    ]
-  );
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    app.state.graph_runtime = build_graph_runtime(_graph_path_from_env())
+    yield
 
-  const handleOptimize = useCallback(() => {
-    if (!canOptimize) return;
-    const shipper = shippers.find((s) => s.id === selectedShipperId);
-    if (!shipper) return;
 
-    const assignedOrders = orders.filter((o) =>
-      selectedOrderIds.includes(o.id)
-    );
+def create_app() -> FastAPI:
+    app = FastAPI(title="Road Finder API", lifespan=_lifespan)
 
-    mutation.mutate({
-      shipper: {
-        id: shipper.id,
-        location: shipper.location,
-      },
-      orders: assignedOrders.map((o) => ({
-        id: o.id,
-        pickup: o.pickup,
-        dropoff: o.dropoff,
-      })),
-      options: {
-        avoid_road_types: avoidRoadTypes,
-        avoid_edge_ids: [],
-      },
-    });
-  }, [
-    canOptimize,
-    mutation,
-    shippers,
-    selectedShipperId,
-    orders,
-    selectedOrderIds,
-    avoidRoadTypes,
-  ]);
+    cors_origins = os.environ.get(
+        "CORS_ALLOW_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173,https://road-finder.vercel.app",
+    ).split(",")
+    cors_origins = [o.strip() for o in cors_origins if o.strip()]
 
-  const handlePlacementModeChange = useCallback(
-    (mode) => {
-      if (mode !== PLACEMENT_MODE.ORDER && pendingPickup) {
-        cancelPendingPickup();
-      }
-      setPlacementMode(mode);
-    },
-    [pendingPickup, cancelPendingPickup, setPlacementMode]
-  );
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_origin_regex=r"https://.*\.vercel\.app",
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
-  const statusText = useMemo(() => {
-    if (!boundsLoaded) return "Đang tải vùng hỗ trợ...";
-    if (status === VRP_STATUS.LOADING) return "Đang tối ưu quãng đường...";
-    if (status === VRP_STATUS.ERROR) return errorMessage;
-    if (status === VRP_STATUS.SUCCESS && tourResult) {
-      return `${getShipperGlyph(tourResult.shipper_id)}: ${formatDistance(tourResult.total_distance_meters)} (${selectedOrderIds.length} đơn)`;
-    }
-    return "Chọn shipper, tick đơn cần giao, rồi bấm \"Tối ưu quãng đường\".";
-  }, [boundsLoaded, status, errorMessage, tourResult, selectedOrderIds.length]);
+    app.include_router(auth_router)
+    app.include_router(route_router)
 
-  const shipperColorMap = useMemo(() => {
-    const map = {};
-    shippers.forEach((s, i) => {
-      map[s.id] = getShipperColor(i);
-    });
-    return map;
-  }, [shippers]);
+    return app
 
-  const selectedOrderLabels = useMemo(
-    () => selectedOrderIds.map((id) => getOrderLabel(id)).join(", "),
-    [selectedOrderIds]
-  );
 
-  return (
-    <div className="app-shell">
-      <header className="app-header">
-        <h1>VRP Delivery Routing</h1>
-        <p>
-          Mỗi đơn P1→D1, P2→D2… mỗi shipper S1, S2… Chọn shipper, tick đơn
-          cần giao, bấm tối ưu để xem quãng đường.
-        </p>
-      </header>
+app = create_app()
 
-      <main className="app-content">
-        <section className="map-panel">
-          <MapView
-            bounds={bbox}
-            orders={orders}
-            shippers={shippers}
-            pendingPickup={pendingPickup}
-            tourResult={tourResult}
-            selectedShipperId={selectedShipperId}
-            selectedOrderIds={selectedOrderIds}
-            shipperColorMap={shipperColorMap}
-            selectionEnabled={boundsLoaded}
-            onAddPoint={handleMapClick}
-          />
-        </section>
 
-        <aside className="side-panel">
-          <ModeSwitcher
-            placementMode={placementMode}
-            onPlacementModeChange={handlePlacementModeChange}
-            orderStep={orderStep}
-            onCancelPendingPickup={cancelPendingPickup}
-          />
-
-          <OptionsPanel
-            avoidRoadTypes={avoidRoadTypes}
-            onAvoidRoadTypesChange={setAvoidRoadTypes}
-          />
-
-          <ShipperAssignmentPanel
-            shippers={shippers}
-            orders={orders}
-            selectedShipperId={selectedShipperId}
-            selectedOrderIds={selectedOrderIds}
-            shipperColorMap={shipperColorMap}
-            status={status}
-            canOptimize={canOptimize}
-            onSelectShipper={selectShipper}
-            onToggleOrder={toggleOrderSelection}
-            onOptimize={handleOptimize}
-          />
-
-          <div className="panel-card controls-card">
-            <button
-              className="secondary-button"
-              onClick={clearAll}
-              disabled={orders.length === 0 && shippers.length === 0}
-              type="button"
-            >
-              Xóa tất cả
-            </button>
-          </div>
-
-          <PointList
-            orders={orders}
-            shippers={shippers}
-            shipperColorMap={shipperColorMap}
-            selectedOrderIds={selectedOrderIds}
-            onRemoveOrder={removeOrder}
-            onRemoveShipper={removeShipper}
-          />
-
-          {status === VRP_STATUS.SUCCESS && tourResult ? (
-            <TourResultPanel
-              tourResult={tourResult}
-              orders={orders}
-              shipperColorMap={shipperColorMap}
-            />
-          ) : (
-            <div className="panel-card">
-              <h2>Trạng thái</h2>
-              <p
-                className={
-                  status === VRP_STATUS.ERROR ? "error-text" : "helper-text"
-                }
-              >
-                {statusText}
-              </p>
-              {selectedShipperId && selectedOrderIds.length > 0 && (
-                <p className="helper-text">
-                  {getShipperGlyph(selectedShipperId)} ({getShipperLabel(selectedShipperId)})
-                  {" "}nhận: {selectedOrderLabels}
-                </p>
-              )}
-              <p className="empty-text" style={{ fontSize: "0.75rem", marginTop: "0.5rem" }}>
-                API: {API_BASE_URL}
-              </p>
-            </div>
-          )}
-        </aside>
-      </main>
-    </div>
-  );
-}
-</file>
-
-<file path="frontend/src/api/routeApi.js">
-export const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL ??
-  (import.meta.env.DEV ? "http://localhost:8000" : "");
-
-const ACCEPTED_AREA_DETAIL = "Error: Not in accepted area";
-
-// Network/CORS/backend-down errors surface as TypeError("Failed to fetch").
-// Wrap with a friendlier message that points the user to the backend URL.
-function networkErrorMessage(cause) {
-  return `Không kết nối được backend tại ${API_BASE_URL}. Hãy chắc chắn backend đang chạy (uvicorn app.main:app --port 8000) và CORS cho phép origin này. (${cause?.message ?? cause})`;
-}
-
-async function parseError(response) {
-  const body = await parseJsonBody(response);
-  if (typeof body?.detail === "string") {
-    return body.detail;
-  }
-  if (body?.detail) {
-    return JSON.stringify(body.detail);
-  }
-  return (await response.text()) || "Lỗi không xác định từ backend";
-}
-
-async function parseJsonBody(response) {
-  const text = await response.clone().text();
-  if (!text) return null;
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
-}
-
-async function postJson(url, data) {
-  let response;
-  try {
-    response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
-    });
-  } catch (err) {
-    throw new Error(networkErrorMessage(err));
-  }
-  if (!response.ok) {
-    throw new Error(await parseError(response));
-  }
-  return response.json();
-}
-
-async function getJson(url) {
-  let response;
-  try {
-    response = await fetch(url);
-  } catch (err) {
-    throw new Error(networkErrorMessage(err));
-  }
-  if (!response.ok) {
-    throw new Error(await parseError(response));
-  }
-  return response.json();
-}
-
-export async function getGraphBounds() {
-  return getJson(`${API_BASE_URL}/graph/bounds`);
-}
-
-export async function postRoute({ start, end, options }) {
-  return postJson(`${API_BASE_URL}/route`, { start, end, options });
-}
-
-export async function postAssignments({ order, shippers, options }) {
-  return postJson(`${API_BASE_URL}/assignments`, { order, shippers, options });
-}
-
-export async function postTours({ shipper, orders, options }) {
-  return postJson(`${API_BASE_URL}/tours`, { shipper, orders, options });
-}
-
-export async function postFleet({ shippers, orders, options }) {
-  return postJson(`${API_BASE_URL}/fleet`, { shippers, orders, options });
-}
-
-export async function checkHealth() {
-  return getJson(`${API_BASE_URL}/health`);
-}
-
-export const ERROR_MESSAGES = {
-  ACCEPTED_AREA: ACCEPTED_AREA_DETAIL,
-};
-
-export { ACCEPTED_AREA_DETAIL };
+# Example:
+#
+# Uvicorn will use this app object to run the backend server.
+#
+# Run command later:
+# uvicorn app.main:app --reload
+#
+# After the server runs, frontend can call:
+# GET /health
+# POST /route
 </file>
 
 <file path="frontend/src/components/MapView.jsx">
@@ -7642,10 +8307,457 @@ MapView.propTypes = {
 };
 </file>
 
+<file path="frontend/src/App.jsx">
+import React, { useCallback, useMemo } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import AuthPanel from "./components/AuthPanel";
+import ScenarioPanel from "./components/ScenarioPanel";
+import { useAuth } from "./hooks/useAuth";
+import MapView from "./components/MapView";
+import ModeSwitcher from "./components/ModeSwitcher";
+import OptionsPanel from "./components/OptionsPanel";
+import ShipperAssignmentPanel from "./components/ShipperAssignmentPanel";
+import TourResultPanel from "./components/TourResultPanel";
+import PointList from "./components/PointList";
+import {
+  ACCEPTED_AREA_DETAIL,
+  getGraphBounds,
+  postTours,
+  API_BASE_URL,
+} from "./api/routeApi";
+import { isInsideBbox } from "./utils/geo";
+import { formatDistance } from "./utils/format";
+import { getOrderLabel } from "./utils/orders";
+import { getShipperGlyph, getShipperLabel } from "./utils/shippers";
+import {
+  PLACEMENT_MODE,
+  VRP_STATUS,
+  useVrpState,
+  getShipperColor,
+} from "./hooks/useVrpState";
+
+const AUTH_REQUIRED_MESSAGE = "Vui lòng đăng nhập Google để tối ưu quãng đường.";
+
+export default function App() {
+  const { configured: authConfigured, loading: authLoading, user } = useAuth();
+  const isAuthenticated = Boolean(user);
+  const canUseVrp = !authConfigured || isAuthenticated;
+
+  const {
+    placementMode,
+    setPlacementMode,
+    orderStep,
+    pendingPickup,
+    orders,
+    shippers,
+    selectedShipperId,
+    selectedOrderIds,
+    tourResult,
+    status,
+    errorMessage,
+    avoidRoadTypes,
+    setAvoidRoadTypes,
+    canOptimize,
+    setPickupForNewOrder,
+    setDropoffForPendingOrder,
+    cancelPendingPickup,
+    addShipper,
+    removeOrder,
+    removeShipper,
+    clearAll,
+    selectShipper,
+    toggleOrderSelection,
+    beginRequest,
+    completeRequest,
+    failRequest,
+    getScenarioSnapshot,
+    loadScenario,
+  } = useVrpState();
+
+  const boundsQuery = useQuery({
+    queryKey: ["graph-bounds"],
+    queryFn: getGraphBounds,
+    staleTime: Infinity,
+    retry: 1,
+  });
+
+  const boundsLoaded = boundsQuery.isSuccess && Boolean(boundsQuery.data?.bbox);
+  const bbox = boundsLoaded ? boundsQuery.data.bbox : null;
+
+  const mutation = useMutation({
+    mutationFn: postTours,
+    onMutate: () => {
+      beginRequest();
+    },
+    onSuccess: (data) => {
+      completeRequest(data);
+    },
+    onError: (error) => {
+      const message = error?.message || "Có lỗi xảy ra khi tối ưu.";
+      if (message.includes("Thiếu token") || message.includes("401")) {
+        failRequest(AUTH_REQUIRED_MESSAGE);
+        return;
+      }
+      failRequest(message);
+    },
+  });
+
+  const handleMapClick = useCallback(
+    (rawPoint) => {
+      if (!boundsLoaded || !canUseVrp) {
+        if (!canUseVrp && authConfigured) {
+          failRequest(AUTH_REQUIRED_MESSAGE);
+        }
+        return;
+      }
+      const candidate = {
+        latitude: rawPoint.lat,
+        longitude: rawPoint.lng,
+      };
+      if (!isInsideBbox(candidate, bbox)) {
+        failRequest(ACCEPTED_AREA_DETAIL);
+        return;
+      }
+
+      if (placementMode === PLACEMENT_MODE.ORDER) {
+        if (pendingPickup) {
+          setDropoffForPendingOrder(candidate);
+        } else {
+          setPickupForNewOrder(candidate);
+        }
+      } else {
+        addShipper(candidate);
+      }
+    },
+    [
+      boundsLoaded,
+      canUseVrp,
+      authConfigured,
+      bbox,
+      placementMode,
+      pendingPickup,
+      setPickupForNewOrder,
+      setDropoffForPendingOrder,
+      addShipper,
+      failRequest,
+    ]
+  );
+
+  const handleOptimize = useCallback(() => {
+    if (!canUseVrp) {
+      failRequest(AUTH_REQUIRED_MESSAGE);
+      return;
+    }
+    if (!canOptimize) return;
+    const shipper = shippers.find((s) => s.id === selectedShipperId);
+    if (!shipper) return;
+
+    const assignedOrders = orders.filter((o) =>
+      selectedOrderIds.includes(o.id)
+    );
+
+    mutation.mutate({
+      shipper: {
+        id: shipper.id,
+        location: shipper.location,
+      },
+      orders: assignedOrders.map((o) => ({
+        id: o.id,
+        pickup: o.pickup,
+        dropoff: o.dropoff,
+      })),
+      options: {
+        avoid_road_types: avoidRoadTypes,
+        avoid_edge_ids: [],
+      },
+    });
+  }, [
+    canUseVrp,
+    canOptimize,
+    mutation,
+    shippers,
+    selectedShipperId,
+    orders,
+    selectedOrderIds,
+    avoidRoadTypes,
+  ]);
+
+  const handlePlacementModeChange = useCallback(
+    (mode) => {
+      if (mode !== PLACEMENT_MODE.ORDER && pendingPickup) {
+        cancelPendingPickup();
+      }
+      setPlacementMode(mode);
+    },
+    [pendingPickup, cancelPendingPickup, setPlacementMode]
+  );
+
+  const statusText = useMemo(() => {
+    if (authConfigured && !authLoading && !isAuthenticated) {
+      return AUTH_REQUIRED_MESSAGE;
+    }
+    if (!boundsLoaded) return "Đang tải vùng hỗ trợ...";
+    if (status === VRP_STATUS.LOADING) return "Đang tối ưu quãng đường...";
+    if (status === VRP_STATUS.ERROR) return errorMessage;
+    if (status === VRP_STATUS.SUCCESS && tourResult) {
+      return `${getShipperGlyph(tourResult.shipper_id)}: ${formatDistance(tourResult.total_distance_meters)} (${selectedOrderIds.length} đơn)`;
+    }
+    return "Chọn shipper, tick đơn cần giao, rồi bấm \"Tối ưu quãng đường\".";
+  }, [
+    authConfigured,
+    authLoading,
+    isAuthenticated,
+    boundsLoaded,
+    status,
+    errorMessage,
+    tourResult,
+    selectedOrderIds.length,
+  ]);
+
+  const shipperColorMap = useMemo(() => {
+    const map = {};
+    shippers.forEach((s, i) => {
+      map[s.id] = getShipperColor(i);
+    });
+    return map;
+  }, [shippers]);
+
+  const selectedOrderLabels = useMemo(
+    () => selectedOrderIds.map((id) => getOrderLabel(id)).join(", "),
+    [selectedOrderIds]
+  );
+
+  return (
+    <div className="app-shell">
+      <header className="app-header">
+        <div className="app-header-top">
+          <h1>VRP Delivery Routing</h1>
+          <AuthPanel />
+        </div>
+        <p>
+          Mỗi đơn P1→D1, P2→D2… mỗi shipper S1, S2… Chọn shipper, tick đơn
+          cần giao, bấm tối ưu để xem quãng đường.
+        </p>
+      </header>
+
+      <main className="app-content">
+        <section className="map-panel">
+          <MapView
+            bounds={bbox}
+            orders={orders}
+            shippers={shippers}
+            pendingPickup={pendingPickup}
+            tourResult={tourResult}
+            selectedShipperId={selectedShipperId}
+            selectedOrderIds={selectedOrderIds}
+            shipperColorMap={shipperColorMap}
+            selectionEnabled={boundsLoaded && canUseVrp}
+            onAddPoint={handleMapClick}
+          />
+          {!canUseVrp && authConfigured && !authLoading ? (
+            <div className="map-auth-overlay">
+              <p>Đăng nhập Google để thêm điểm và tối ưu quãng đường.</p>
+            </div>
+          ) : null}
+        </section>
+
+        <aside className="side-panel">
+          <ScenarioPanel
+            user={user}
+            scenarioSnapshot={getScenarioSnapshot}
+            onLoadScenario={loadScenario}
+            onAddPresetShipper={addShipper}
+          />
+
+          <ModeSwitcher
+            placementMode={placementMode}
+            onPlacementModeChange={handlePlacementModeChange}
+            orderStep={orderStep}
+            onCancelPendingPickup={cancelPendingPickup}
+          />
+
+          <OptionsPanel
+            avoidRoadTypes={avoidRoadTypes}
+            onAvoidRoadTypesChange={setAvoidRoadTypes}
+          />
+
+          <ShipperAssignmentPanel
+            shippers={shippers}
+            orders={orders}
+            selectedShipperId={selectedShipperId}
+            selectedOrderIds={selectedOrderIds}
+            shipperColorMap={shipperColorMap}
+            status={status}
+            canOptimize={canOptimize && canUseVrp}
+            onSelectShipper={selectShipper}
+            onToggleOrder={toggleOrderSelection}
+            onOptimize={handleOptimize}
+          />
+
+          <div className="panel-card controls-card">
+            <button
+              className="secondary-button"
+              onClick={clearAll}
+              disabled={orders.length === 0 && shippers.length === 0}
+              type="button"
+            >
+              Xóa tất cả
+            </button>
+          </div>
+
+          <PointList
+            orders={orders}
+            shippers={shippers}
+            shipperColorMap={shipperColorMap}
+            selectedOrderIds={selectedOrderIds}
+            onRemoveOrder={removeOrder}
+            onRemoveShipper={removeShipper}
+          />
+
+          {status === VRP_STATUS.SUCCESS && tourResult ? (
+            <TourResultPanel
+              tourResult={tourResult}
+              orders={orders}
+              shipperColorMap={shipperColorMap}
+            />
+          ) : (
+            <div className="panel-card">
+              <h2>Trạng thái</h2>
+              <p
+                className={
+                  status === VRP_STATUS.ERROR ? "error-text" : "helper-text"
+                }
+              >
+                {statusText}
+              </p>
+              {selectedShipperId && selectedOrderIds.length > 0 && (
+                <p className="helper-text">
+                  {getShipperGlyph(selectedShipperId)} ({getShipperLabel(selectedShipperId)})
+                  {" "}nhận: {selectedOrderLabels}
+                </p>
+              )}
+              <p className="empty-text" style={{ fontSize: "0.75rem", marginTop: "0.5rem" }}>
+                API: {API_BASE_URL}
+              </p>
+            </div>
+          )}
+        </aside>
+      </main>
+    </div>
+  );
+}
+</file>
+
+<file path="frontend/src/api/routeApi.js">
+import { getAuthHeaders } from "./authHeaders";
+
+export const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL ??
+  (import.meta.env.DEV ? "http://localhost:8000" : "");
+
+const ACCEPTED_AREA_DETAIL = "Error: Not in accepted area";
+
+// Network/CORS/backend-down errors surface as TypeError("Failed to fetch").
+// Wrap with a friendlier message that points the user to the backend URL.
+function networkErrorMessage(cause) {
+  return `Không kết nối được backend tại ${API_BASE_URL}. Hãy chắc chắn backend đang chạy (uvicorn app.main:app --port 8000) và CORS cho phép origin này. (${cause?.message ?? cause})`;
+}
+
+async function parseError(response) {
+  const body = await parseJsonBody(response);
+  if (typeof body?.detail === "string") {
+    return body.detail;
+  }
+  if (body?.detail) {
+    return JSON.stringify(body.detail);
+  }
+  return (await response.text()) || "Lỗi không xác định từ backend";
+}
+
+async function parseJsonBody(response) {
+  const text = await response.clone().text();
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+async function postJson(url, data) {
+  let response;
+  try {
+    const authHeaders = await getAuthHeaders();
+    response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders },
+      body: JSON.stringify(data),
+    });
+  } catch (err) {
+    throw new Error(networkErrorMessage(err));
+  }
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return response.json();
+}
+
+async function getJson(url) {
+  let response;
+  try {
+    const authHeaders = await getAuthHeaders();
+    response = await fetch(url, { headers: authHeaders });
+  } catch (err) {
+    throw new Error(networkErrorMessage(err));
+  }
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return response.json();
+}
+
+export async function getGraphBounds() {
+  return getJson(`${API_BASE_URL}/graph/bounds`);
+}
+
+export async function postRoute({ start, end, options }) {
+  return postJson(`${API_BASE_URL}/route`, { start, end, options });
+}
+
+export async function postAssignments({ order, shippers, options }) {
+  return postJson(`${API_BASE_URL}/assignments`, { order, shippers, options });
+}
+
+export async function postTours({ shipper, orders, options }) {
+  return postJson(`${API_BASE_URL}/tours`, { shipper, orders, options });
+}
+
+export async function postFleet({ shippers, orders, options }) {
+  return postJson(`${API_BASE_URL}/fleet`, { shippers, orders, options });
+}
+
+export async function checkHealth() {
+  return getJson(`${API_BASE_URL}/health`);
+}
+
+export async function getAuthSession() {
+  return getJson(`${API_BASE_URL}/auth/session`);
+}
+
+export const ERROR_MESSAGES = {
+  ACCEPTED_AREA: ACCEPTED_AREA_DETAIL,
+};
+
+export { ACCEPTED_AREA_DETAIL };
+</file>
+
 <file path="backend/app/routers/route_api.py">
-from fastapi import APIRouter, Request
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Request
 
 from app.application.cost_matrix import CostMatrix
+from app.auth.dependencies import require_current_user
 from app.application.graph_bounds import build_graph_bounds_payload
 from app.application.health import build_health_payload
 from app.domain.assignment import AssignmentSnapContext, rank_shippers_for_order
@@ -7678,6 +8790,8 @@ from app.services.tour_response_builder import (
 
 router = APIRouter()
 
+AuthenticatedUser = Annotated[dict, Depends(require_current_user)]
+
 
 def _runtime(request: Request):
     return request.app.state.graph_runtime
@@ -7705,7 +8819,11 @@ def graph_bounds(request: Request) -> GraphBoundsResponse:
 
 
 @router.post("/route")
-def route(request: Request, body: RouteRequest) -> RouteResponse:
+def route(
+    request: Request,
+    body: RouteRequest,
+    _user: AuthenticatedUser,
+) -> RouteResponse:
     options = _to_routing_options(body.options)
     try:
         result = compute_shortest_path_response(
@@ -7720,7 +8838,11 @@ def route(request: Request, body: RouteRequest) -> RouteResponse:
 
 
 @router.post("/assignments")
-def assignments(request: Request, body: AssignmentRequest) -> AssignmentResponse:
+def assignments(
+    request: Request,
+    body: AssignmentRequest,
+    _user: AuthenticatedUser,
+) -> AssignmentResponse:
     runtime = _runtime(request)
     options = _to_routing_options(body.options)
 
@@ -7809,7 +8931,11 @@ def assignments(request: Request, body: AssignmentRequest) -> AssignmentResponse
 
 
 @router.post("/tours")
-def tours(request: Request, body: TourRequest) -> TourResponse:
+def tours(
+    request: Request,
+    body: TourRequest,
+    _user: AuthenticatedUser,
+) -> TourResponse:
     runtime = _runtime(request)
     options = _to_routing_options(body.options)
 
@@ -7875,7 +9001,11 @@ def tours(request: Request, body: TourRequest) -> TourResponse:
 
 
 @router.post("/fleet")
-def fleet(request: Request, body: FleetRequest) -> FleetResponse:
+def fleet(
+    request: Request,
+    body: FleetRequest,
+    _user: AuthenticatedUser,
+) -> FleetResponse:
     runtime = _runtime(request)
     options = _to_routing_options(body.options)
 
