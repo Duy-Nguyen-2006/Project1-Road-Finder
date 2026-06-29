@@ -2,12 +2,13 @@ import React from "react";
 import PropTypes from "prop-types";
 import { VRP_STATUS } from "../hooks/useVrpState";
 import {
-  getOrderColor,
   getOrderLabel,
-  getOrderNumber,
+  getPickupGlyph,
+  getDropoffGlyph,
 } from "../utils/orders";
 import { getShipperGlyph, getShipperLabel } from "../utils/shippers";
 import {
+  OrderAssignmentsPropType,
   OrderPropType,
   ShipperColorMapPropType,
   ShipperPropType,
@@ -18,6 +19,7 @@ export default function ShipperAssignmentPanel({
   orders,
   selectedShipperId,
   selectedOrderIds,
+  orderAssignments,
   shipperColorMap,
   status,
   canOptimize,
@@ -38,7 +40,8 @@ export default function ShipperAssignmentPanel({
     <div className="panel-card assignment-panel">
       <h2>Phân công & tối ưu</h2>
       <p className="helper-text">
-        Chọn shipper, tick các đơn shipper đó nhận, rồi bấm tối ưu quãng đường.
+        Chọn shipper, tick các đơn shipper đó nhận. Đơn đã gán cho shipper khác
+        sẽ bị khóa.
       </p>
 
       <h3>1. Chọn shipper</h3>
@@ -64,32 +67,64 @@ export default function ShipperAssignmentPanel({
       </div>
 
       <h3>2. Chọn đơn shipper nhận</h3>
-      {orders.length === 0 ? (
+      {!selectedShipperId ? (
+        <p className="helper-text">Chọn shipper trước khi tick đơn.</p>
+      ) : orders.length === 0 ? (
         <p className="helper-text">Chưa có đơn hàng. Thêm đơn trên bản đồ.</p>
       ) : (
         <div className="order-select-list">
           {orders.map((order) => {
-            const color = getOrderColor(order.id, orders);
             const label = getOrderLabel(order.id);
-            const n = getOrderNumber(order.id);
-            const checked = selectedOrderIds.includes(order.id);
+            const owner = orderAssignments[order.id];
+            const checked = owner === selectedShipperId;
+            const lockedByOther = Boolean(owner && owner !== selectedShipperId);
+            const ownerColor = lockedByOther
+              ? shipperColorMap?.[owner] ?? "#666"
+              : undefined;
+
             return (
               <label
                 key={order.id}
-                className={`select-row order-select-row${checked ? " selected" : ""}`}
-                style={{ borderColor: checked ? color : undefined }}
+                className={`select-row order-select-row${checked ? " selected" : ""}${lockedByOther ? " locked" : ""}`}
+                style={{
+                  borderColor: checked
+                    ? shipperColorMap?.[selectedShipperId]
+                    : lockedByOther
+                      ? ownerColor
+                      : undefined,
+                }}
               >
                 <input
                   type="checkbox"
                   checked={checked}
+                  disabled={lockedByOther}
                   onChange={() => onToggleOrder(order.id)}
                 />
-                <span className="order-color-dot" style={{ background: color }} />
+                <span
+                  className="order-color-dot"
+                  style={{
+                    background: owner
+                      ? shipperColorMap?.[owner] ?? "#9ca3af"
+                      : "#d1d5db",
+                  }}
+                />
                 <span className="select-row-label">
                   <strong>{label}</strong>
                   <span className="order-route-hint">
-                    P{n} (lấy) → D{n} (giao)
+                    {getPickupGlyph(order.id)} (lấy) → {getDropoffGlyph(order.id)} (giao)
                   </span>
+                  {lockedByOther ? (
+                    <span
+                      className="owner-badge"
+                      style={{
+                        color: ownerColor,
+                        borderColor: ownerColor,
+                        background: `${ownerColor}18`,
+                      }}
+                    >
+                      Đã gán {getShipperGlyph(owner)}
+                    </span>
+                  ) : null}
                 </span>
               </label>
             );
@@ -103,7 +138,9 @@ export default function ShipperAssignmentPanel({
         disabled={!canOptimize}
         type="button"
       >
-        {status === VRP_STATUS.LOADING ? "Đang tối ưu..." : "Tối ưu quãng đường"}
+        {status === VRP_STATUS.LOADING
+          ? "Đang tối ưu..."
+          : "Tối ưu tất cả shipper"}
       </button>
     </div>
   );
@@ -114,6 +151,7 @@ ShipperAssignmentPanel.propTypes = {
   orders: PropTypes.arrayOf(OrderPropType).isRequired,
   selectedShipperId: PropTypes.string,
   selectedOrderIds: PropTypes.arrayOf(PropTypes.string).isRequired,
+  orderAssignments: OrderAssignmentsPropType.isRequired,
   shipperColorMap: ShipperColorMapPropType,
   status: PropTypes.string.isRequired,
   canOptimize: PropTypes.bool.isRequired,

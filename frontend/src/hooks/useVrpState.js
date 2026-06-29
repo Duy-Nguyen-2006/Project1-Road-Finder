@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 export const PLACEMENT_MODE = {
   ORDER: "order",
@@ -28,6 +28,8 @@ export const SHIPPER_COLORS = [
   "#e11d48",
 ];
 
+export const UNASSIGNED_ORDER_COLOR = "#9ca3af";
+
 export function getShipperColor(index) {
   return SHIPPER_COLORS[index % SHIPPER_COLORS.length];
 }
@@ -51,10 +53,24 @@ function syncIdCounters(orders, shippers) {
   _nextShipperId = _maxIdNumber(shippers, "s") + 1;
 }
 
-function clearTourOnEdit(setTourResult, setStatus, setErrorMessage) {
-  setTourResult(null);
+function clearTourOnEdit(setTourResults, setStatus, setErrorMessage) {
+  setTourResults([]);
   setStatus(VRP_STATUS.IDLE);
   setErrorMessage("");
+}
+
+function migrateOrderAssignments(payload) {
+  if (payload?.orderAssignments) {
+    return payload.orderAssignments;
+  }
+  if (payload?.selectedShipperId && payload?.selectedOrderIds?.length) {
+    const map = {};
+    for (const orderId of payload.selectedOrderIds) {
+      map[orderId] = payload.selectedShipperId;
+    }
+    return map;
+  }
+  return {};
 }
 
 export function useVrpState() {
@@ -63,14 +79,21 @@ export function useVrpState() {
   const [orders, setOrders] = useState([]);
   const [shippers, setShippers] = useState([]);
   const [selectedShipperId, setSelectedShipperId] = useState(null);
-  const [selectedOrderIds, setSelectedOrderIds] = useState([]);
-  const [tourResult, setTourResult] = useState(null);
+  const [orderAssignments, setOrderAssignments] = useState({});
+  const [tourResults, setTourResults] = useState([]);
   const [status, setStatus] = useState(VRP_STATUS.IDLE);
   const [errorMessage, setErrorMessage] = useState("");
   const [avoidRoadTypes, setAvoidRoadTypes] = useState([]);
 
+  const selectedOrderIds = useMemo(() => {
+    if (!selectedShipperId) return [];
+    return Object.entries(orderAssignments)
+      .filter(([, shipperId]) => shipperId === selectedShipperId)
+      .map(([orderId]) => orderId);
+  }, [orderAssignments, selectedShipperId]);
+
   const resetTour = useCallback(() => {
-    clearTourOnEdit(setTourResult, setStatus, setErrorMessage);
+    clearTourOnEdit(setTourResults, setStatus, setErrorMessage);
   }, []);
 
   const setPickupForNewOrder = useCallback((point) => {
@@ -106,7 +129,12 @@ export function useVrpState() {
 
   const removeOrder = useCallback((orderId) => {
     setOrders((prev) => prev.filter((o) => o.id !== orderId));
-    setSelectedOrderIds((prev) => prev.filter((id) => id !== orderId));
+    setOrderAssignments((prev) => {
+      if (!prev[orderId]) return prev;
+      const next = { ...prev };
+      delete next[orderId];
+      return next;
+    });
     resetTour();
   }, [resetTour]);
 
@@ -119,6 +147,15 @@ export function useVrpState() {
       });
       return next;
     });
+    setOrderAssignments((prev) => {
+      const next = { ...prev };
+      for (const [orderId, ownerId] of Object.entries(next)) {
+        if (ownerId === shipperId) {
+          delete next[orderId];
+        }
+      }
+      return next;
+    });
     resetTour();
   }, [resetTour]);
 
@@ -127,8 +164,8 @@ export function useVrpState() {
     setShippers([]);
     setPendingPickup(null);
     setSelectedShipperId(null);
-    setSelectedOrderIds([]);
-    setTourResult(null);
+    setOrderAssignments({});
+    setTourResults([]);
     setStatus(VRP_STATUS.IDLE);
     setErrorMessage("");
   }, []);
@@ -138,14 +175,25 @@ export function useVrpState() {
     resetTour();
   }, [resetTour]);
 
-  const toggleOrderSelection = useCallback((orderId) => {
-    setSelectedOrderIds((prev) =>
-      prev.includes(orderId)
-        ? prev.filter((id) => id !== orderId)
-        : [...prev, orderId]
-    );
-    resetTour();
-  }, [resetTour]);
+  const toggleOrderSelection = useCallback(
+    (orderId) => {
+      if (!selectedShipperId) return;
+      setOrderAssignments((prev) => {
+        const owner = prev[orderId];
+        if (owner === selectedShipperId) {
+          const next = { ...prev };
+          delete next[orderId];
+          return next;
+        }
+        if (owner && owner !== selectedShipperId) {
+          return prev;
+        }
+        return { ...prev, [orderId]: selectedShipperId };
+      });
+      resetTour();
+    },
+    [selectedShipperId, resetTour]
+  );
 
   const beginRequest = useCallback(() => {
     setStatus(VRP_STATUS.LOADING);
@@ -153,7 +201,7 @@ export function useVrpState() {
   }, []);
 
   const completeRequest = useCallback((data) => {
-    setTourResult(data);
+    setTourResults(Array.isArray(data) ? data : [data]);
     setStatus(VRP_STATUS.SUCCESS);
     setErrorMessage("");
   }, []);
@@ -168,10 +216,10 @@ export function useVrpState() {
       orders,
       shippers,
       selectedShipperId,
-      selectedOrderIds,
+      orderAssignments,
       avoidRoadTypes,
     }),
-    [orders, shippers, selectedShipperId, selectedOrderIds, avoidRoadTypes]
+    [orders, shippers, selectedShipperId, orderAssignments, avoidRoadTypes]
   );
 
   const loadScenario = useCallback((payload) => {
@@ -183,17 +231,16 @@ export function useVrpState() {
     setSelectedShipperId(
       payload?.selectedShipperId ?? nextShippers[0]?.id ?? null
     );
-    setSelectedOrderIds(payload?.selectedOrderIds ?? []);
+    setOrderAssignments(migrateOrderAssignments(payload));
     setAvoidRoadTypes(payload?.avoidRoadTypes ?? []);
     setPendingPickup(null);
-    setTourResult(null);
+    setTourResults([]);
     setStatus(VRP_STATUS.IDLE);
     setErrorMessage("");
   }, []);
 
   const canOptimize =
-    Boolean(selectedShipperId) &&
-    selectedOrderIds.length > 0 &&
+    Object.keys(orderAssignments).length > 0 &&
     status !== VRP_STATUS.LOADING;
 
   const orderStep = pendingPickup
@@ -209,7 +256,8 @@ export function useVrpState() {
     shippers,
     selectedShipperId,
     selectedOrderIds,
-    tourResult,
+    orderAssignments,
+    tourResults,
     status,
     errorMessage,
     avoidRoadTypes,

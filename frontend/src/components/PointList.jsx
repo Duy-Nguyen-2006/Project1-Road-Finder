@@ -2,13 +2,14 @@ import React from "react";
 import PropTypes from "prop-types";
 import {
   getDropoffGlyph,
-  getOrderColor,
   getOrderLabel,
   getPickupGlyph,
 } from "../utils/orders";
 import { getShipperGlyph, getShipperLabel } from "../utils/shippers";
+import { UNASSIGNED_ORDER_COLOR } from "../hooks/useVrpState";
 import {
   CoordPropType,
+  OrderAssignmentsPropType,
   OrderPropType,
   ShipperColorMapPropType,
   ShipperPropType,
@@ -31,7 +32,7 @@ export default function PointList({
   orders,
   shippers,
   shipperColorMap,
-  selectedOrderIds,
+  orderAssignments,
   onRemoveOrder,
   onRemoveShipper,
 }) {
@@ -71,20 +72,24 @@ export default function PointList({
         <>
           <h3>Đơn hàng ({orders.length})</h3>
           {orders.map((o) => {
-            const color = getOrderColor(o.id, orders);
             const label = getOrderLabel(o.id);
-            const assigned = selectedOrderIds.includes(o.id);
+            const owner = orderAssignments[o.id];
+            const color = owner
+              ? shipperColorMap?.[owner] ?? UNASSIGNED_ORDER_COLOR
+              : UNASSIGNED_ORDER_COLOR;
             return (
               <div
                 key={o.id}
-                className={`point-section order-point-section${assigned ? " assigned" : ""}`}
+                className={`point-section order-point-section${owner ? " assigned" : ""}`}
                 style={{ borderLeftColor: color }}
               >
                 <div>
                   <strong style={{ color }}>{label}</strong>
                   <div className="order-flow-label">
                     {getPickupGlyph(o.id)} → {getDropoffGlyph(o.id)}
-                    {assigned ? " · đã chọn cho shipper" : ""}
+                    {owner
+                      ? ` · gán cho ${getShipperGlyph(owner)}`
+                      : " · chưa gán"}
                   </div>
                   <div className="point-coords">
                     <span
@@ -125,7 +130,7 @@ PointList.propTypes = {
   orders: PropTypes.arrayOf(OrderPropType).isRequired,
   shippers: PropTypes.arrayOf(ShipperPropType).isRequired,
   shipperColorMap: ShipperColorMapPropType,
-  selectedOrderIds: PropTypes.arrayOf(PropTypes.string).isRequired,
+  orderAssignments: OrderAssignmentsPropType.isRequired,
   onRemoveOrder: PropTypes.func.isRequired,
   onRemoveShipper: PropTypes.func.isRequired,
 };

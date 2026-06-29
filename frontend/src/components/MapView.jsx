@@ -14,7 +14,6 @@ import PropTypes from "prop-types";
 import { bboxToLeaflet } from "../utils/geo";
 import {
   getDropoffGlyph,
-  getOrderColor,
   getOrderLabel,
   getPickupGlyph,
 } from "../utils/orders";
@@ -22,12 +21,15 @@ import {
   getShipperGlyph,
   getShipperLabel,
 } from "../utils/shippers";
+import { buildTourDisplayData } from "../utils/tourDisplay";
+import { UNASSIGNED_ORDER_COLOR } from "../hooks/useVrpState";
 import {
   CoordPropType,
+  OrderAssignmentsPropType,
   OrderPropType,
   ShipperColorMapPropType,
   ShipperPropType,
-  TourResultPropType,
+  TourResultsPropType,
 } from "./proptypes";
 
 delete L.Icon.Default.prototype._getIconUrl;
@@ -40,16 +42,22 @@ L.Icon.Default.mergeOptions({
     "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
 });
 
-function pinIcon({ color, glyph, selected = false }) {
+function pinIcon({ color, glyph, selected = false, sequence = null }) {
   const ring = selected
     ? `<circle cx="16" cy="15" r="13" fill="none" stroke="#000" stroke-width="2" opacity="0.35"/>`
     : "";
+  const sequenceBadge =
+    sequence != null
+      ? `<circle cx="26" cy="6" r="8" fill="${color}" stroke="white" stroke-width="1.5"/>
+         <text x="26" y="9.5" text-anchor="middle" font-size="9" font-weight="700" fill="white" font-family="Arial, sans-serif">${sequence}</text>`
+      : "";
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 42" width="32" height="42">
     <path d="M16 1 C8 1 2 7 2 15 C2 25 16 41 16 41 C16 41 30 25 30 15 C30 7 24 1 16 1 Z"
       fill="${color}" stroke="white" stroke-width="2.5"/>
     <circle cx="16" cy="15" r="9" fill="white"/>
     ${ring}
     <text x="16" y="20" text-anchor="middle" font-size="${glyph.length > 2 ? 10 : 12}" font-weight="700" fill="${color}" font-family="Arial, sans-serif">${glyph}</text>
+    ${sequenceBadge}
   </svg>`;
   return L.divIcon({
     className: "marker-pin",
@@ -122,45 +130,45 @@ function legToLatLngs(leg) {
   return leg.route_points.map((p) => [p.latitude, p.longitude]);
 }
 
-function orderIdFromLegKind(kind) {
-  if (typeof kind !== "string") return null;
-  const idx = kind.lastIndexOf("_");
-  return idx > 0 ? kind.slice(0, idx) : null;
-}
-
 export default function MapView({
   bounds,
   orders,
   shippers,
   pendingPickup,
-  tourResult,
+  tourResults,
+  orderAssignments,
   selectedShipperId,
-  selectedOrderIds,
   shipperColorMap,
   selectionEnabled,
   onAddPoint,
 }) {
   const rectangleBounds = useMemo(() => bboxToLeaflet(bounds), [bounds]);
 
+  const { stopLookup } = useMemo(
+    () => buildTourDisplayData(tourResults),
+    [tourResults]
+  );
+
   const routeLegs = useMemo(() => {
-    if (!tourResult?.legs?.length) return [];
-    const shipperColor = shipperColorMap?.[tourResult.shipper_id] ?? "#2563eb";
-    return tourResult.legs
-      .filter((leg) => leg.route_points.length > 0)
-      .map((leg, index) => {
-        const orderId = orderIdFromLegKind(leg.kind);
-        const color = orderId
-          ? getOrderColor(orderId, orders)
-          : shipperColor;
-        const isDropoff = leg.kind?.endsWith("_dropoff");
-        return {
-          key: `${leg.kind}-${index}`,
-          points: legToLatLngs(leg),
-          color,
-          dashed: isDropoff,
-        };
-      });
-  }, [tourResult, orders, shipperColorMap]);
+    if (!tourResults?.length) return [];
+    const legs = [];
+    for (const tour of tourResults) {
+      if (!tour.legs?.length) continue;
+      const shipperColor = shipperColorMap?.[tour.shipper_id] ?? "#2563eb";
+      tour.legs
+        .filter((leg) => leg.route_points.length > 0)
+        .forEach((leg, index) => {
+          const isDropoff = leg.kind?.endsWith("_dropoff");
+          legs.push({
+            key: `${tour.shipper_id}-${leg.kind}-${index}`,
+            points: legToLatLngs(leg),
+            color: shipperColor,
+            dashed: isDropoff,
+          });
+        });
+    }
+    return legs;
+  }, [tourResults, shipperColorMap]);
 
   const allRoutePoints = useMemo(
     () => routeLegs.flatMap((leg) => leg.points),
@@ -168,6 +176,18 @@ export default function MapView({
   );
 
   const pendingOrderNumber = orders.length + 1;
+
+  const getOrderPinColor = (orderId) => {
+    const owner = orderAssignments[orderId];
+    if (!owner) return UNASSIGNED_ORDER_COLOR;
+    return shipperColorMap?.[owner] ?? UNASSIGNED_ORDER_COLOR;
+  };
+
+  const getStopSequence = (orderId, kind) => {
+    const owner = orderAssignments[orderId];
+    if (!owner) return null;
+    return stopLookup[`${owner}:${orderId}:${kind}`] ?? null;
+  };
 
   return (
     <MapContainer
@@ -216,9 +236,12 @@ export default function MapView({
       })}
 
       {orders.map((o) => {
-        const color = getOrderColor(o.id, orders);
+        const color = getOrderPinColor(o.id);
         const label = getOrderLabel(o.id);
-        const selected = selectedOrderIds.includes(o.id);
+        const owner = orderAssignments[o.id];
+        const assignedToActive = owner === selectedShipperId;
+        const pickupSequence = getStopSequence(o.id, "pickup");
+        const dropoffSequence = getStopSequence(o.id, "dropoff");
         return (
           <React.Fragment key={o.id}>
             <Marker
@@ -226,12 +249,15 @@ export default function MapView({
               icon={pinIcon({
                 color,
                 glyph: getPickupGlyph(o.id),
-                selected,
+                selected: assignedToActive,
+                sequence: pickupSequence,
               })}
-              zIndexOffset={selected ? 900 : 0}
+              zIndexOffset={assignedToActive ? 900 : 0}
             >
               <Popup>
                 <strong>{label}</strong> — Lấy hàng ({getPickupGlyph(o.id)})
+                {pickupSequence != null ? ` · điểm ${pickupSequence}` : ""}
+                {owner ? ` · ${getShipperGlyph(owner)}` : " · chưa gán"}
               </Popup>
             </Marker>
             <Marker
@@ -239,12 +265,15 @@ export default function MapView({
               icon={pinIcon({
                 color,
                 glyph: getDropoffGlyph(o.id),
-                selected,
+                selected: assignedToActive,
+                sequence: dropoffSequence,
               })}
-              zIndexOffset={selected ? 900 : 0}
+              zIndexOffset={assignedToActive ? 900 : 0}
             >
               <Popup>
                 <strong>{label}</strong> — Giao hàng ({getDropoffGlyph(o.id)})
+                {dropoffSequence != null ? ` · điểm ${dropoffSequence}` : ""}
+                {owner ? ` · ${getShipperGlyph(owner)}` : " · chưa gán"}
               </Popup>
             </Marker>
           </React.Fragment>
@@ -292,9 +321,9 @@ MapView.propTypes = {
   orders: PropTypes.arrayOf(OrderPropType).isRequired,
   shippers: PropTypes.arrayOf(ShipperPropType).isRequired,
   pendingPickup: CoordPropType,
-  tourResult: TourResultPropType,
+  tourResults: TourResultsPropType,
+  orderAssignments: OrderAssignmentsPropType.isRequired,
   selectedShipperId: PropTypes.string,
-  selectedOrderIds: PropTypes.arrayOf(PropTypes.string).isRequired,
   shipperColorMap: ShipperColorMapPropType,
   selectionEnabled: PropTypes.bool.isRequired,
   onAddPoint: PropTypes.func.isRequired,

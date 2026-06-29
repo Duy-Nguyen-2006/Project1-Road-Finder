@@ -54,3 +54,7 @@ export const FleetResultPropType = PropTypes.shape({
 });
 
 export const ShipperColorMapPropType = PropTypes.objectOf(PropTypes.string);
+
+export const OrderAssignmentsPropType = PropTypes.objectOf(PropTypes.string);
+
+export const TourResultsPropType = PropTypes.arrayOf(TourResultPropType);

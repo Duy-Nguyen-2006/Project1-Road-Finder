@@ -7,7 +7,7 @@ import MapView from "./components/MapView";
 import ModeSwitcher from "./components/ModeSwitcher";
 import OptionsPanel from "./components/OptionsPanel";
 import ShipperAssignmentPanel from "./components/ShipperAssignmentPanel";
-import TourResultPanel from "./components/TourResultPanel";
+import MultiShipperResultPanel from "./components/MultiShipperResultPanel";
 import PointList from "./components/PointList";
 import {
   ACCEPTED_AREA_DETAIL,
@@ -19,6 +19,7 @@ import { isInsideBbox } from "./utils/geo";
 import { formatDistance } from "./utils/format";
 import { getOrderLabel } from "./utils/orders";
 import { getShipperGlyph, getShipperLabel } from "./utils/shippers";
+import { buildTourDisplayData } from "./utils/tourDisplay";
 import {
   PLACEMENT_MODE,
   VRP_STATUS,
@@ -27,6 +28,38 @@ import {
 } from "./hooks/useVrpState";
 
 const AUTH_REQUIRED_MESSAGE = "Vui lòng đăng nhập Google để tối ưu quãng đường.";
+
+function buildOptimizePayloads({ orderAssignments, orders, shippers, avoidRoadTypes }) {
+  const groups = {};
+  for (const [orderId, shipperId] of Object.entries(orderAssignments)) {
+    const order = orders.find((o) => o.id === orderId);
+    if (!order) continue;
+    if (!groups[shipperId]) groups[shipperId] = [];
+    groups[shipperId].push(order);
+  }
+
+  return Object.entries(groups)
+    .map(([shipperId, assignedOrders]) => {
+      const shipper = shippers.find((s) => s.id === shipperId);
+      if (!shipper) return null;
+      return {
+        shipper: {
+          id: shipper.id,
+          location: shipper.location,
+        },
+        orders: assignedOrders.map((o) => ({
+          id: o.id,
+          pickup: o.pickup,
+          dropoff: o.dropoff,
+        })),
+        options: {
+          avoid_road_types: avoidRoadTypes,
+          avoid_edge_ids: [],
+        },
+      };
+    })
+    .filter(Boolean);
+}
 
 export default function App() {
   const { configured: authConfigured, loading: authLoading, user } = useAuth();
@@ -42,7 +75,8 @@ export default function App() {
     shippers,
     selectedShipperId,
     selectedOrderIds,
-    tourResult,
+    orderAssignments,
+    tourResults,
     status,
     errorMessage,
     avoidRoadTypes,
@@ -75,7 +109,7 @@ export default function App() {
   const bbox = boundsLoaded ? boundsQuery.data.bbox : null;
 
   const mutation = useMutation({
-    mutationFn: postTours,
+    mutationFn: (payloads) => Promise.all(payloads.map(postTours)),
     onMutate: () => {
       beginRequest();
     },
@@ -138,37 +172,25 @@ export default function App() {
       return;
     }
     if (!canOptimize) return;
-    const shipper = shippers.find((s) => s.id === selectedShipperId);
-    if (!shipper) return;
 
-    const assignedOrders = orders.filter((o) =>
-      selectedOrderIds.includes(o.id)
-    );
-
-    mutation.mutate({
-      shipper: {
-        id: shipper.id,
-        location: shipper.location,
-      },
-      orders: assignedOrders.map((o) => ({
-        id: o.id,
-        pickup: o.pickup,
-        dropoff: o.dropoff,
-      })),
-      options: {
-        avoid_road_types: avoidRoadTypes,
-        avoid_edge_ids: [],
-      },
+    const payloads = buildOptimizePayloads({
+      orderAssignments,
+      orders,
+      shippers,
+      avoidRoadTypes,
     });
+    if (payloads.length === 0) return;
+
+    mutation.mutate(payloads);
   }, [
     canUseVrp,
     canOptimize,
     mutation,
-    shippers,
-    selectedShipperId,
+    orderAssignments,
     orders,
-    selectedOrderIds,
+    shippers,
     avoidRoadTypes,
+    failRequest,
   ]);
 
   const handlePlacementModeChange = useCallback(
@@ -181,6 +203,13 @@ export default function App() {
     [pendingPickup, cancelPendingPickup, setPlacementMode]
   );
 
+  const { totalDistanceMeters } = useMemo(
+    () => buildTourDisplayData(tourResults),
+    [tourResults]
+  );
+
+  const assignedOrderCount = Object.keys(orderAssignments).length;
+
   const statusText = useMemo(() => {
     if (authConfigured && !authLoading && !isAuthenticated) {
       return AUTH_REQUIRED_MESSAGE;
@@ -188,10 +217,10 @@ export default function App() {
     if (!boundsLoaded) return "Đang tải vùng hỗ trợ...";
     if (status === VRP_STATUS.LOADING) return "Đang tối ưu quãng đường...";
     if (status === VRP_STATUS.ERROR) return errorMessage;
-    if (status === VRP_STATUS.SUCCESS && tourResult) {
-      return `${getShipperGlyph(tourResult.shipper_id)}: ${formatDistance(tourResult.total_distance_meters)} (${selectedOrderIds.length} đơn)`;
+    if (status === VRP_STATUS.SUCCESS && tourResults.length > 0) {
+      return `Tổng ${formatDistance(totalDistanceMeters)} · ${assignedOrderCount} đơn · ${tourResults.length} shipper`;
     }
-    return "Chọn shipper, tick đơn cần giao, rồi bấm \"Tối ưu quãng đường\".";
+    return 'Chọn shipper, tick đơn cần giao, rồi bấm "Tối ưu tất cả shipper".';
   }, [
     authConfigured,
     authLoading,
@@ -199,8 +228,9 @@ export default function App() {
     boundsLoaded,
     status,
     errorMessage,
-    tourResult,
-    selectedOrderIds.length,
+    tourResults.length,
+    totalDistanceMeters,
+    assignedOrderCount,
   ]);
 
   const shipperColorMap = useMemo(() => {
@@ -211,10 +241,14 @@ export default function App() {
     return map;
   }, [shippers]);
 
-  const selectedOrderLabels = useMemo(
-    () => selectedOrderIds.map((id) => getOrderLabel(id)).join(", "),
-    [selectedOrderIds]
-  );
+  const assignmentSummary = useMemo(() => {
+    const byShipper = {};
+    for (const [orderId, shipperId] of Object.entries(orderAssignments)) {
+      if (!byShipper[shipperId]) byShipper[shipperId] = [];
+      byShipper[shipperId].push(getOrderLabel(orderId));
+    }
+    return byShipper;
+  }, [orderAssignments]);
 
   return (
     <div className="app-shell">
@@ -224,8 +258,8 @@ export default function App() {
           <AuthPanel />
         </div>
         <p>
-          Mỗi đơn P1→D1, P2→D2… mỗi shipper S1, S2… Chọn shipper, tick đơn
-          cần giao, bấm tối ưu để xem quãng đường.
+          Mỗi đơn P1→D1, P2→D2… mỗi shipper S1, S2… Gán đơn cho từng shipper,
+          bấm tối ưu để xem nhiều tuyến màu khác nhau trên bản đồ.
         </p>
       </header>
 
@@ -236,9 +270,9 @@ export default function App() {
             orders={orders}
             shippers={shippers}
             pendingPickup={pendingPickup}
-            tourResult={tourResult}
+            tourResults={tourResults}
+            orderAssignments={orderAssignments}
             selectedShipperId={selectedShipperId}
-            selectedOrderIds={selectedOrderIds}
             shipperColorMap={shipperColorMap}
             selectionEnabled={boundsLoaded && canUseVrp}
             onAddPoint={handleMapClick}
@@ -275,6 +309,7 @@ export default function App() {
             orders={orders}
             selectedShipperId={selectedShipperId}
             selectedOrderIds={selectedOrderIds}
+            orderAssignments={orderAssignments}
             shipperColorMap={shipperColorMap}
             status={status}
             canOptimize={canOptimize && canUseVrp}
@@ -298,14 +333,14 @@ export default function App() {
             orders={orders}
             shippers={shippers}
             shipperColorMap={shipperColorMap}
-            selectedOrderIds={selectedOrderIds}
+            orderAssignments={orderAssignments}
             onRemoveOrder={removeOrder}
             onRemoveShipper={removeShipper}
           />
 
-          {status === VRP_STATUS.SUCCESS && tourResult ? (
-            <TourResultPanel
-              tourResult={tourResult}
+          {status === VRP_STATUS.SUCCESS && tourResults.length > 0 ? (
+            <MultiShipperResultPanel
+              tourResults={tourResults}
               orders={orders}
               shipperColorMap={shipperColorMap}
             />
@@ -319,11 +354,15 @@ export default function App() {
               >
                 {statusText}
               </p>
-              {selectedShipperId && selectedOrderIds.length > 0 && (
-                <p className="helper-text">
-                  {getShipperGlyph(selectedShipperId)} ({getShipperLabel(selectedShipperId)})
-                  {" "}nhận: {selectedOrderLabels}
-                </p>
+              {Object.keys(assignmentSummary).length > 0 && (
+                <div className="assignment-summary">
+                  {Object.entries(assignmentSummary).map(([shipperId, labels]) => (
+                    <p key={shipperId} className="helper-text">
+                      {getShipperGlyph(shipperId)} ({getShipperLabel(shipperId)}
+                      ) nhận: {labels.join(", ")}
+                    </p>
+                  ))}
+                </div>
               )}
               <p className="empty-text" style={{ fontSize: "0.75rem", marginTop: "0.5rem" }}>
                 API: {API_BASE_URL}
