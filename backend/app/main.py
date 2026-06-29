@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.application.graph_runtime import build_graph_runtime
 from app.infrastructure.graph_loader import DEFAULT_GRAPH_PATH
+from app.routers.auth_api import router as auth_router
 from app.routers.route_api import router as route_router
 
 
@@ -28,7 +29,7 @@ def create_app() -> FastAPI:
 
     cors_origins = os.environ.get(
         "CORS_ALLOW_ORIGINS",
-        "http://localhost:5173,http://127.0.0.1:5173",
+        "http://localhost:5173,http://127.0.0.1:5173,https://road-finder.vercel.app",
     ).split(",")
     cors_origins = [o.strip() for o in cors_origins if o.strip()]
 
@@ -41,6 +42,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    app.include_router(auth_router)
     app.include_router(route_router)
 
     return app

@@ -1,4 +1,5 @@
 fastapi
 uvicorn[standard]
 pydantic
+PyJWT[crypto]>=2.8
 requests  # test-only: used by tests/integration/test_no_external_runtime.py to monkey-patch external HTTP

@@ -52,11 +52,52 @@ button, input, textarea, select {
   padding: 1.25rem 1.5rem;
 }
 
+.app-header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
 .app-header h1 {
   margin: 0;
   font-size: 1.5rem;
   font-weight: 600;
   letter-spacing: -0.02em;
+}
+
+.auth-panel {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.auth-panel--signed-in .auth-user {
+  font-size: 0.875rem;
+  color: var(--color-sky-tint);
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.auth-button {
+  padding: 0.4rem 0.75rem;
+  font-size: 0.8125rem;
+}
+
+.auth-error {
+  margin: 0;
+  font-size: 0.75rem;
+}
+
+.auth-callback {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 2rem;
 }
 
 .app-header p {

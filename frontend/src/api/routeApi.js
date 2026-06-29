@@ -1,3 +1,5 @@
+import { getAuthHeaders } from "./authHeaders";
+
 export const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ??
   (import.meta.env.DEV ? "http://localhost:8000" : "");
@@ -34,9 +36,10 @@ async function parseJsonBody(response) {
 async function postJson(url, data) {
   let response;
   try {
+    const authHeaders = await getAuthHeaders();
     response = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeaders },
       body: JSON.stringify(data),
     });
   } catch (err) {
@@ -51,7 +54,8 @@ async function postJson(url, data) {
 async function getJson(url) {
   let response;
   try {
-    response = await fetch(url);
+    const authHeaders = await getAuthHeaders();
+    response = await fetch(url, { headers: authHeaders });
   } catch (err) {
     throw new Error(networkErrorMessage(err));
   }
@@ -83,6 +87,10 @@ export async function postFleet({ shippers, orders, options }) {
 
 export async function checkHealth() {
   return getJson(`${API_BASE_URL}/health`);
+}
+
+export async function getAuthSession() {
+  return getJson(`${API_BASE_URL}/auth/session`);
 }
 
 export const ERROR_MESSAGES = {

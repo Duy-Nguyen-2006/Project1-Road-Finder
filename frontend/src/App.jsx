@@ -1,5 +1,6 @@
 import React, { useCallback, useMemo } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import AuthPanel from "./components/AuthPanel";
 import MapView from "./components/MapView";
 import ModeSwitcher from "./components/ModeSwitcher";
 import OptionsPanel from "./components/OptionsPanel";
@@ -180,7 +181,10 @@ export default function App() {
   return (
     <div className="app-shell">
       <header className="app-header">
-        <h1>VRP Delivery Routing</h1>
+        <div className="app-header-top">
+          <h1>VRP Delivery Routing</h1>
+          <AuthPanel />
+        </div>
         <p>
           Mỗi đơn P1→D1, P2→D2… mỗi shipper S1, S2… Chọn shipper, tick đơn
           cần giao, bấm tối ưu để xem quãng đường.

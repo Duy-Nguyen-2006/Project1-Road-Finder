@@ -14,3 +14,10 @@ class NoRouteError(Exception):
 
     def __init__(self, message: str = NO_ROUTE_DETAIL) -> None:
         super().__init__(message)
+
+
+class AuthError(Exception):
+    """Invalid or missing authentication credentials."""
+
+    def __init__(self, message: str = "Authentication failed") -> None:
+        super().__init__(message)
