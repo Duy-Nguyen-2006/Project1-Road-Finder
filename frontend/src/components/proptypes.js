@@ -45,6 +45,7 @@ export const TourResultPropType = PropTypes.shape({
   legs: PropTypes.arrayOf(LegPropType),
   total_distance_meters: PropTypes.number.isRequired,
   optimal: PropTypes.bool,
+  feasible: PropTypes.bool,
 });
 
 export const FleetResultPropType = PropTypes.shape({

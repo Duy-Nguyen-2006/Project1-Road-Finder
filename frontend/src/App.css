@@ -442,6 +442,34 @@ button, input, textarea, select {
   margin-left: auto;
 }
 
+.feasible-badge {
+  font-size: 0.75rem;
+  padding: 0.125rem 0.5rem;
+  border-radius: var(--radius);
+  background: #fef2f2;
+  color: #dc2626;
+  border: 1px solid #fecaca;
+  flex-shrink: 0;
+}
+
+.optimize-warnings {
+  border-color: #fcd34d;
+  background: #fffbeb;
+}
+
+.optimize-warning-list {
+  margin: 0;
+  padding-left: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.warning-text {
+  color: #b45309;
+  font-size: 0.875rem;
+}
+
 .stop-list {
   list-style: none;
   padding: 0;

@@ -51,10 +51,16 @@ function syncIdCounters(orders, shippers) {
   _nextShipperId = _maxIdNumber(shippers, "s") + 1;
 }
 
-function clearTourOnEdit(setTourResults, setStatus, setErrorMessage) {
+function clearTourOnEdit(
+  setTourResults,
+  setStatus,
+  setErrorMessage,
+  setOptimizeWarnings
+) {
   setTourResults([]);
   setStatus(VRP_STATUS.IDLE);
   setErrorMessage("");
+  setOptimizeWarnings([]);
 }
 
 function migrateOrderAssignments(payload) {
@@ -81,6 +87,7 @@ export function useVrpState() {
   const [tourResults, setTourResults] = useState([]);
   const [status, setStatus] = useState(VRP_STATUS.IDLE);
   const [errorMessage, setErrorMessage] = useState("");
+  const [optimizeWarnings, setOptimizeWarnings] = useState([]);
   const [avoidRoadTypes, setAvoidRoadTypes] = useState([]);
 
   const selectedOrderIds = useMemo(() => {
@@ -91,7 +98,12 @@ export function useVrpState() {
   }, [orderAssignments, selectedShipperId]);
 
   const resetTour = useCallback(() => {
-    clearTourOnEdit(setTourResults, setStatus, setErrorMessage);
+    clearTourOnEdit(
+      setTourResults,
+      setStatus,
+      setErrorMessage,
+      setOptimizeWarnings
+    );
   }, []);
 
   const setPickupForNewOrder = useCallback((point) => {
@@ -166,6 +178,7 @@ export function useVrpState() {
     setTourResults([]);
     setStatus(VRP_STATUS.IDLE);
     setErrorMessage("");
+    setOptimizeWarnings([]);
   }, []);
 
   const selectShipper = useCallback((shipperId) => {
@@ -196,10 +209,12 @@ export function useVrpState() {
   const beginRequest = useCallback(() => {
     setStatus(VRP_STATUS.LOADING);
     setErrorMessage("");
+    setOptimizeWarnings([]);
   }, []);
 
-  const completeRequest = useCallback((data) => {
+  const completeRequest = useCallback((data, warnings = []) => {
     setTourResults(Array.isArray(data) ? data : [data]);
+    setOptimizeWarnings(warnings);
     setStatus(VRP_STATUS.SUCCESS);
     setErrorMessage("");
   }, []);
@@ -235,6 +250,7 @@ export function useVrpState() {
     setTourResults([]);
     setStatus(VRP_STATUS.IDLE);
     setErrorMessage("");
+    setOptimizeWarnings([]);
   }, []);
 
   const canOptimize =
@@ -258,6 +274,7 @@ export function useVrpState() {
     tourResults,
     status,
     errorMessage,
+    optimizeWarnings,
     avoidRoadTypes,
     setAvoidRoadTypes,
     canOptimize,

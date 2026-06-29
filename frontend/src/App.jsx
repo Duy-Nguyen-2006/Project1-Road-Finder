@@ -29,6 +29,16 @@ import {
 
 const AUTH_REQUIRED_MESSAGE = "Vui lòng đăng nhập Google để tối ưu quãng đường.";
 
+function formatOptimizeError(reason) {
+  if (reason?.status === 401) {
+    return { message: AUTH_REQUIRED_MESSAGE, status: 401 };
+  }
+  return {
+    message: reason?.message || "Có lỗi xảy ra khi tối ưu.",
+    status: reason?.status,
+  };
+}
+
 function buildOptimizePayloads({ orderAssignments, orders, shippers, avoidRoadTypes }) {
   const groups = {};
   for (const [orderId, shipperId] of Object.entries(orderAssignments)) {
@@ -74,11 +84,11 @@ export default function App() {
     orders,
     shippers,
     selectedShipperId,
-    selectedOrderIds,
     orderAssignments,
     tourResults,
     status,
     errorMessage,
+    optimizeWarnings,
     avoidRoadTypes,
     setAvoidRoadTypes,
     canOptimize,
@@ -109,12 +119,38 @@ export default function App() {
   const bbox = boundsLoaded ? boundsQuery.data.bbox : null;
 
   const mutation = useMutation({
-    mutationFn: (payloads) => Promise.all(payloads.map(postTours)),
+    mutationFn: async (payloads) => {
+      const settled = await Promise.allSettled(payloads.map(postTours));
+      const tours = [];
+      const errors = [];
+
+      settled.forEach((result, index) => {
+        if (result.status === "fulfilled") {
+          tours.push(result.value);
+          return;
+        }
+        const { message, status } = formatOptimizeError(result.reason);
+        errors.push({
+          shipperId: payloads[index].shipper.id,
+          message,
+          status,
+        });
+      });
+
+      if (tours.length === 0) {
+        const first = errors[0];
+        const err = new Error(first?.message ?? "Tối ưu thất bại");
+        if (first?.status) err.status = first.status;
+        throw err;
+      }
+
+      return { tours, errors };
+    },
     onMutate: () => {
       beginRequest();
     },
-    onSuccess: (data) => {
-      completeRequest(data);
+    onSuccess: ({ tours, errors }) => {
+      completeRequest(tours, errors);
     },
     onError: (error) => {
       if (error?.status === 401) {
@@ -308,7 +344,6 @@ export default function App() {
             shippers={shippers}
             orders={orders}
             selectedShipperId={selectedShipperId}
-            selectedOrderIds={selectedOrderIds}
             orderAssignments={orderAssignments}
             shipperColorMap={shipperColorMap}
             status={status}
@@ -339,11 +374,26 @@ export default function App() {
           />
 
           {status === VRP_STATUS.SUCCESS && tourResults.length > 0 ? (
-            <MultiShipperResultPanel
-              tourResults={tourResults}
-              orders={orders}
-              shipperColorMap={shipperColorMap}
-            />
+            <>
+              {optimizeWarnings.length > 0 ? (
+                <div className="panel-card optimize-warnings">
+                  <h2>Cảnh báo</h2>
+                  <ul className="optimize-warning-list">
+                    {optimizeWarnings.map((warning) => (
+                      <li key={warning.shipperId} className="warning-text">
+                        {getShipperLabel(warning.shipperId)} (
+                        {getShipperGlyph(warning.shipperId)}): {warning.message}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              <MultiShipperResultPanel
+                tourResults={tourResults}
+                orders={orders}
+                shipperColorMap={shipperColorMap}
+              />
+            </>
           ) : (
             <div className="panel-card">
               <h2>Trạng thái</h2>

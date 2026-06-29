@@ -51,6 +51,9 @@ export default function MultiShipperResultPanel({
                 <span className="shipper-distance">
                   {formatDistance(tour.total_distance_meters)}
                 </span>
+                {tour.feasible === false ? (
+                  <span className="feasible-badge">Không khả thi</span>
+                ) : null}
               </div>
 
               <ul className="stop-list">
