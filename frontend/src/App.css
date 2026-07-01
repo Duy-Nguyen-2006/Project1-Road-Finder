@@ -99,6 +99,12 @@ button, input, textarea, select {
   place-items: center;
   padding: 2rem;
 }
+.auth-callback > * {
+  margin: 0;
+}
+.auth-callback p + .primary-button {
+  margin-top: 1rem;
+}
 
 .app-header p {
   margin: 0.35rem 0 0;
